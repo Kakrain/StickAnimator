@@ -7,13 +7,10 @@ import time
 from Tkinter import *
 import ntpath
 import tkMessageBox
-from skimage import data, io, segmentation, color
-from skimage.future import graph
-from skimage.filters import rank
-from skimage.morphology import watershed, disk
-from skimage.util import img_as_ubyte
+import tkFont
 from PIL import Image, ImageDraw, ImageTk
 import os
+import scipy.interpolate as si
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
 import threading
@@ -29,9 +26,6 @@ import gc
 
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
-
-import matplotlib.pyplot as plt
-
 class Animation(object):
     videolen=-1
     videoi=-1
@@ -336,7 +330,7 @@ class Animation(object):
         if (num<0):
             num=0
         global primera
-        primera=0
+        primera=[]
         i=0
         
         for p in self.framesc3d[num]:
@@ -346,7 +340,7 @@ class Animation(object):
             pi+=1
             i+=1
             if(gi<len(self.strokesraw) and pi==self.strokesraw[gi]):
-                primera=0
+                primera=[]
                 gi+=1
     def decompose(self):
         for frame in self.frames:
@@ -1125,7 +1119,13 @@ def drawOvals(pt,color):
 def drawEmptyOval(pt,rad,color):
     w.create_oval(pt[0]-rad,pt[1]-rad,pt[0]+rad,pt[1]+rad,outline=color,width=3)
   
-
+def bspline2D(d,K,N):
+    x=bsplineAnt(d[:,0],K,N)
+    y=bsplineAnt(d[:,1],K,N)
+    nuevo=[]
+    for j in range(0,len(x)):
+        nuevo.append([x[j],y[j]])
+    return nuevo
 def bspline3D(d,K,N):
     x=bsplineAnt(d[:,0],K,N)
     y=bsplineAnt(d[:,1],K,N)
@@ -1234,6 +1234,8 @@ global master
 master = Tk()
 master.columnconfigure(0, weight=1)
 master.columnconfigure(1, weight=1)
+master.columnconfigure(2, weight=1)
+master.rowconfigure(0, weight=1)
 master.rowconfigure(1, weight=1)
 
 class CustomCanvas(Canvas):
@@ -1241,8 +1243,9 @@ class CustomCanvas(Canvas):
     heightback=0
     back=0
     pin=0
+    topaint=0
     def __init__(self,master, *args, **kwargs):
-        Canvas.__init__(self,master,*args, **kwargs)
+        Canvas.__init__(self,master,bd=2,background="gray",*args, **kwargs)
         self.back = PhotoImage(file="cuadros.gif")
 ##        self.pin = PhotoImage(file="pin.gif")
         path = "pin.png"
@@ -1250,6 +1253,7 @@ class CustomCanvas(Canvas):
         image = image.resize((40,40), Image.ANTIALIAS)
         self.pin = ImageTk.PhotoImage(image)
         self.bind("<Configure>",self.repaint)
+        self.topaint=[]
         self.widthback=self.back.width()
         self.heightback=self.back.height()
         self.repaint(0)
@@ -1261,15 +1265,55 @@ class CustomCanvas(Canvas):
             for j in range(row):
                 self.create_image((i+0.5)*self.widthback,(j+0.5)*self.heightback, image=self.back)
         self.create_image(self.winfo_width()/2,20, image=self.pin)
-        
+        for f in self.topaint:
+            f()
 class CustomFrame(Frame):
-    def __init__(self,master):
+    expandbutton=0
+    toolbar=0
+    name=0
+    customFont=0
+    expgif=0
+    shrgif=0
+    prop=0
+    def __init__(self,master,name):
         Frame.__init__(self,master,bd=3,background='white')
+        self.name=name
+        self.expgif=PhotoImage(file="expand.gif")
+        self.shrgif=PhotoImage(file="shrink.gif")
+        self.customFont = tkFont.Font(family='Buxton Sketch', size=14)
+        self.toolbar=Frame(self,background="white",bd=2,cursor="arrow")
+        self.toolbar.pack(side=TOP, fill="x")
+        self.expandbutton = Button(self.toolbar,command=self.expand,image=self.expgif,width="20",height="20")
+        self.expandbutton.pack(side="right")
+        title=Label(self.toolbar,text=self.name,font=self.customFont,background="white",fg="black")
+        title.pack(side="left")
+    def saveProp(self):
+        self.prop=[int(self.grid_info()["column"]),int(self.grid_info()["row"]),float(self.canvas.winfo_width()),float(self.canvas.winfo_height()),int(self.grid_info()["columnspan"]),int(self.grid_info()["rowspan"])]
+    def loadProp(self):
+        self.grid(column=self.prop[0],row=self.prop[1],columnspan=self.prop[4],rowspan=self.prop[5])
+        self.canvas.config(width=float(math.floor(self.prop[2])),height=float(math.floor(self.prop[3])))
+    def expand(self):
+        global customframes
+        for frame in customframes:
+            frame.saveProp()
+            frame.grid_forget()
+            
+        self.grid(column=0,row=0)
+        global master
+        self.canvas.config(width=master.winfo_width(),height=master.winfo_height())
+        self.expandbutton.config(image=self.shrgif,command=self.shrink)
+    def shrink(self):
+        global customframes
+        for frame in customframes:
+            frame.grid_forget()
+            frame.loadProp()
+        self.expandbutton.config(image=self.expgif,command=self.expand)
+    
         
 class AnimationFrame(CustomFrame):
     canvas=0
     def __init__(self,master):
-        CustomFrame.__init__(self,master)
+        CustomFrame.__init__(self,master,"área de animación")
         self.grid(column=0,row=0,columnspan=3,sticky=W+E)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
@@ -1280,81 +1324,139 @@ class DrawFrame(CustomFrame):
     strokes=0
     currentpoints=0
     bottomButton=0
-    buttonraw=0
-    buttonsmooth=0
-    buttonedit=0
-    splined=0
     body=0
-    stickfigure=0
-    buttonframe=0
     head=0
-    cargarbut=0
-    guardarbut=0
+    lastsize=[]
+    finished=False
+    controlPoints=0
     def __init__(self,master):
-        CustomFrame.__init__(self,master)
+        CustomFrame.__init__(self,master,"área de dibujo")
         self.grid(column=0,row=1,sticky=W+E+N+S)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
         self.currentpoints=[]
+        self.body=[]
         self.strokes=[]
-        self.splined=[]
-        self.stickfigure=[]
-        self.head=[]
+        self.head=getCircle(12*0.01,250)
+        self.head=TranslateTo(self.head,[self.canvas.winfo_width()*0.5,self.canvas.winfo_height()*0.26])
+        self.controlPoints=[Centroid(self.head)]
+        self.lastsize=[float(self.canvas.winfo_width()),float(self.canvas.winfo_height())]
+        self.canvas.topaint.append(self.redraw)
         self.canvas.bind( "<B1-Motion>", paintDraw )
         self.canvas.bind( "<Button-1>", clickedDraw )
         self.canvas.bind( "<ButtonRelease-1>", releaseDraw )
         self.canvas.bind( "<Button-3>", clicked3Draw )
         self.config(cursor="pencil")
-        
+    def dibujarOjos(self):
+        diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
+        rad=diametro/2
+        radOjos=diametro/5
+        fullsep=diametro/3
+        c=Centroid(self.head)
+        sep=fullsep*(float((rad-(c[0]-self.controlPoints[0][0])))/rad)
+        x=self.controlPoints[0][0]
+        y=self.controlPoints[0][1]
+        r=radOjos
+        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline="black", width=3)
+        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline="black", width=3)
+    def normalizePositionAll(self):
+        for i in range(len(self.strokes)):
+            c=Centroid(self.strokes[i])
+            if(i==0):
+                cuello=self.getCuello(self.strokes[i])
+                delta=[cuello[0]-self.strokes[i][len(self.strokes[i])-1][0],cuello[1]-self.strokes[i][len(self.strokes[i])-1][1]]
+            else:
+                jointArms=self.strokes[0][3]
+                jointLegs=self.strokes[0][0]
+                distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][len(self.strokes[i])-1]))
+                distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][len(self.strokes[i])-1]))
+                if(distancearms<distancelegs):
+                    delta=[jointArms[0]-self.strokes[i][0][0],jointArms[1]-self.strokes[i][0][1]]
+                else:
+                    delta=[jointLegs[0]-self.strokes[i][0][0],jointLegs[1]-self.strokes[i][0][1]]
+            self.strokes[i]=TranslateTo(self.strokes[i],[c[0]+delta[0],c[1]+delta[1]])
+                                    
+    def normalize(self,points):
+        c=Centroid(points)
+        newpoints=TranslateTo(points,[0,0])
+        maxy=0
+        miny=99999999999
+        for p in newpoints:
+            maxy=max(maxy,p[1])
+            miny=min(miny,p[1])
+        newpoints=ScaleToY(newpoints,(maxy-miny)*self.canvas.winfo_height()/self.lastsize[1])
+        newpoints=TranslateTo(newpoints,[c[0]*self.canvas.winfo_width()/self.lastsize[0],c[1]*self.canvas.winfo_height()/self.lastsize[1]])
+        return newpoints
+    def numBrazos(self):
+        num=0
+        jointArms=self.strokes[0][3]
+        jointLegs=self.strokes[0][0]
+        for i in range(1,len(self.strokes)):
+            distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][len(self.strokes[i])-1]))
+            distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][len(self.strokes[i])-1]))
+            if(distancearms<distancelegs):
+                num+=1
+        return num
+    def numPiernas(self):
+        return len(self.strokes)-self.numBrazos()-1
+    def completePoints(self,points):
+        newpoints=points[:]
+        if len(self.strokes)==0:
+            ch=Centroid(self.head)
+            if(Distance(ch,newpoints[len(newpoints)-1])>Distance(ch,newpoints[0])):
+                newpoints.reverse()
+            newpoints=self.arreglarCuello(newpoints)
+            return newpoints
+        jointArms=self.strokes[0][3]
+        jointLegs=self.strokes[0][0]
+        distancearms=min(Distance(jointArms,newpoints[0]),Distance(jointArms,newpoints[len(newpoints)-1]))
+        distancelegs=min(Distance(jointLegs,newpoints[0]),Distance(jointLegs,newpoints[len(newpoints)-1]))
+        if(self.numPiernas()>=2 or (distancearms<distancelegs and self.numBrazos()<2)):
+            if(Distance(jointArms,newpoints[0])>Distance(jointArms,newpoints[len(newpoints)-1])):
+                newpoints.reverse()
+            newpoints.insert(0,jointArms)
+        else:
+            if(Distance(jointLegs,newpoints[0])>Distance(jointLegs,newpoints[len(newpoints)-1])):
+                newpoints.reverse()
+            newpoints.insert(0,jointLegs)
+        return newpoints
+    def redraw(self):
+        self.head=self.normalize(self.head)
+        for i in range(len(self.strokes)):
+            self.strokes[i]=self.normalize(self.strokes[i])
+        self.normalizePositionAll()
+        self.drawAllNormal(self.strokes,"black")
+        self.drawPoints(self.head,"black")
+        self.lastsize=[float(self.canvas.winfo_width()),float(self.canvas.winfo_height())]
+##        self.dibujarOjos()
     def isHuman(self):
         return len(self.strokes)==6
     def hechoAction(self):
-        if not self.isHuman():
-            tkMessageBox.showinfo("No es humano", "El stickfigure que dibujó no es de un humano\nverifique que haya hecho un trazo por cada parte del cuerpo y vuelva a intentarlo")
-            return
-        self.bottomButton.config(text="Comparar",command=self.compararSpline,state=DISABLED)
-        self.config(relief=RAISED)
         self.canvas.unbind("<B1-Motion>")
         self.canvas.unbind("<Button-1>")
         self.canvas.unbind("<ButtonRelease-1>")
         self.canvas.unbind("<Button-3>")
         self.config(cursor="arrow")
-        
-        self.buttonnormal.config(relief=SUNKEN)
-        self.buttonraw.config(relief=RAISED)
-        self.buttonsmooth.config(relief=RAISED)
-        self.buttonframe.pack(side=RIGHT)
-
-        ir=getRoundest(self.strokes)
-        rad=getRadius(self.strokes[ir])
-        head=getCircle(rad,250)
-        c=Centroid(self.strokes[ir])
-        offset(head,c)
-        self.head=head
-
-        self.body=[]
-        
-        for i in range(len(self.strokes)):
-            if i!=ir:
-                self.body.append(self.strokes[i][:])
-        
         self.ordenarBody()
-        self.body[0].append(c)
-        self.stickfigure=toStick(self.body)
-        self.completeBody()
-        self.arreglarCuello(c,rad)
-        self.splined=toSpline(self.body)
     def estaDentroCabeza(self,p,c,rad):
         return Distance(p,c)<=rad
-    def arreglarCuello(self,c,rad):
-        while(self.estaDentroCabeza(self.body[0][-1],c,rad)):
-            self.body[0]=self.body[0][:-1]
-        start=self.body[0][-1]
+    def getCuello(self,points):
+        c=Centroid(self.head)
+        rad=Distance(self.head[0],self.head[len(self.head)/2])/2
+        start=points[-1]
         end=c
         delta=[end[0]-start[0],end[1]-start[1]]
         p=1-(float(rad)/Distance(start,end))
         end=[start[0]+p*delta[0],start[1]+p*delta[1]]
-        self.body[0].append(end)
+        return end
+    def arreglarCuello(self,points):
+        newpoints=points[:]
+        c=Centroid(self.head)
+        rad=Distance(self.head[0],self.head[len(self.head)/2])/2
+        while(self.estaDentroCabeza(newpoints[-1],c,rad)):
+            newpoints=newpoints[:-1]
+        newpoints.append(self.getCuello(newpoints))
+        return newpoints
     
     def editAction(self):
         self.bottomButton.config(text="Hecho!",command=self.hechoAction)
@@ -1372,7 +1474,7 @@ class DrawFrame(CustomFrame):
         self.drawAllNormal(self.strokes,"blue")
     def drawAllNormal(self,All,color):
         for a in All:
-            self.drawPoints(a,color)
+            self.drawPoints(toSpline(a),color)
     def drawAllSmooth(self,All,color):
         for a in All:
             self.drawPoints(a,color)
@@ -1383,13 +1485,10 @@ class DrawFrame(CustomFrame):
             self.drawPointsStick(All[i],colors[i])
         self.drawPoints(self.head,"magenta")
     def drawPoints(self,todraw,color):
-        primera=0
+        global primera 
+        primera=[]
         for a in todraw:
-            if primera==0:
-                primera=a
-            else:
-                self.canvas.create_line(primera[0],primera[1],a[0],a[1],fill = color,width=7)
-                primera=a
+            drawPluma(self.canvas,a,color)
     def drawPointsStick(self,todraw,color):
         primera=0
         for a in todraw:
@@ -1401,84 +1500,37 @@ class DrawFrame(CustomFrame):
             self.canvas.create_oval(a[0]-2.5,a[1]-2.5,a[0]+2.5,a[1]+2.5,fill="red")
         self.canvas.create_oval(todraw[0][0]-2.5,todraw[0][1]-2.5,todraw[0][0]+2.5,todraw[0][1]+2.5,fill="blue")
         self.canvas.create_oval(todraw[len(todraw)-1][0]-2.5,todraw[len(todraw)-1][1]-2.5,todraw[len(todraw)-1][0]+2.5,todraw[len(todraw)-1][1]+2.5,fill="orange")
-    def completeBody(self):
-        centerarms=[(self.body[1][0][0]+self.body[2][0][0])/2,(self.body[1][0][1]+self.body[2][0][1])/2]
-        self.body[1].insert(0,centerarms[:])
-        self.body[2].insert(0,centerarms[:])
-        self.body[3].insert(0,self.body[0][0][:])
-        self.body[4].insert(0,self.body[0][0][:])
-        
     def ordenarBody(self):
-        self.centers=[]
-        for i in range(len(self.body)):
-##            self.centers.append(self.body[i][int(len(self.body[i])/2)])
-            self.centers.append(Centroid(self.body[i]))
-        ti=getTorso(self.body)
-
-        self.body.insert(0, self.body.pop(ti))
-        self.centers.insert(0, self.centers.pop(ti))
-
-        arm=-1
-        d=99999999
-        for i in range(1,len(self.centers)):
-            if(self.centers[i][1]<d):
-                d=self.centers[i][1]
-                arm=i
-        
-        self.body.insert(1, self.body.pop(arm))
-        self.centers.insert(1, self.centers.pop(arm))
-
-        arm=-1
-        d=99999999
-        for i in range(2,len(self.centers)):
-            if(self.centers[i][1]<d):
-                d=self.centers[i][1]
-                arm=i
-        
-        self.body.insert(2, self.body.pop(arm))
-        self.centers.insert(2, self.centers.pop(arm))
-
-        if self.body[0][0][1]<self.body[0][len(self.body[0])-1][1]:
-            self.body[0]=self.body[0][::-1]
-            
-        self.ordenarBrazos()
-        self.ordenarPiernas()
-    def ordenarBrazos(self):
-        if(self.centers[1][0]>self.centers[2][0]):
-            self.centers[1],self.centers[2]=self.centers[2],self.centers[1]
-            self.body[1],self.body[2]=self.body[2],self.body[1]
-        dmin=9999999
-        change=[False,False]
-        d=Distance(self.body[1][0],self.body[0][int(len(self.body[0])*0.75)])
-        d2=Distance(self.body[1][len(self.body[1])-1],self.body[0][int(len(self.body[0])*0.75)])
-        if(d2<d):
-            change[0]=True
-
-        d=Distance(self.body[2][0],self.body[0][int(len(self.body[0])*0.75)])
-        d2=Distance(self.body[2][len(self.body[2])-1],self.body[0][int(len(self.body[0])*0.75)])
-        if(d2<d):
-            change[0]=True
-
-        if change[0]:
-            self.body[1]=self.body[1][::-1]
-        if change[1]:
-            self.body[2]=self.body[2][::-1]
-        
-    def ordenarPiernas(self):
-        if(self.centers[3][0]>self.centers[4][0]):
-            self.centers[3],self.centers[4]=self.centers[4],self.centers[3]
-            self.body[3],self.body[4]=self.body[4],self.body[3]
-
-        if self.body[3][0][1]>self.body[3][len(self.body[3])-1][1]:
-            self.body[3]=self.body[3][::-1]
-        if self.body[4][0][1]>self.body[4][len(self.body[4])-1][1]:
-            self.body[4]=self.body[4][::-1]
+        brazos=[]
+        newstrokes=[self.strokes[0]]
+        jointArms=self.strokes[0][3]
+        jointLegs=self.strokes[0][0]
+        for i in range(1,len(self.strokes)):
+            distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][len(self.strokes[i])-1]))
+            distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][len(self.strokes[i])-1]))
+            if(distancearms<distancelegs):
+                brazos.append(i)    
+            if(len(brazos)==2):
+                break
+        if(Centroid(self.strokes[brazos[0]])[0]>Centroid(self.strokes[brazos[1]])[0]):
+            brazos.reverse()
+        newstrokes.append(self.strokes[brazos[0]])
+        newstrokes.append(self.strokes[brazos[1]])
+        indexes=[1,2,3,4]
+        indexes.remove(brazos[0])
+        indexes.remove(brazos[1])
+        if(Centroid(self.strokes[indexes[0]])[0]>Centroid(self.strokes[indexes[1]])[0]):
+            newstrokes.append(self.strokes[indexes[1]])
+            newstrokes.append(self.strokes[indexes[0]])
+        else:
+            newstrokes.append(self.strokes[indexes[0]])
+            newstrokes.append(self.strokes[indexes[1]])
+        self.strokes=newstrokes
 def cornersIndex(corners,i):
         for c in corners:
             if i == c[0]:
                 return c[1]
         return -1
-
 def TranslateTo(pts,p):
    c=Centroid(pts)
    return np.subtract(np.add(pts,[p]*len(pts)),[c]*len(pts))
@@ -1589,23 +1641,18 @@ def ordenarStroke(stroke):
     else:
         return list(reversed(stroke))
 def toSpline(points):
-    newpoints=[]
-    global vision
-    curva=vision.anim.getCurva2D(0)
-    for i in range(len(points)):
-        newpoints.append(BezierSpline(points[i],2,len(curva[i])))
-    return newpoints
+    num=20
+    return BezierSpline(points,2,num)#bspline2D(np.array(points),2,100)
 def toStick(points):
-    newpoints=[]
-    for i in range(0,len(points)):
-        newpoints.append(BezierSpline(points[i],2,4))
-    return newpoints
+    return BezierSpline(points,2,5)#3,4
 def paintDraw(event):
     global draw
-    draw.canvas.create_line(draw.currentpoints[len(draw.currentpoints)-1][0],draw.currentpoints[len(draw.currentpoints)-1][1],event.x,event.y,fill = "blue",width=7)
+    drawLapiz(draw.canvas,draw.currentpoints[len(draw.currentpoints)-1])
     draw.currentpoints.append([event.x,event.y])
 def clickedDraw(event):
     global draw
+    global primera
+    primera=[]
     draw.currentpoints=[]
     draw.currentpoints.append([event.x,event.y])
 def offset(points,p):
@@ -1628,18 +1675,19 @@ def Centroid(pts):
 def releaseDraw(event):
     global draw
     draw.currentpoints.append([event.x,event.y])
-    draw.canvas.create_line(draw.currentpoints[len(draw.currentpoints)-1][0],draw.currentpoints[len(draw.currentpoints)-1][1],event.x,event.y,fill = "blue",width=7)
-    draw.strokes.append(draw.currentpoints)
+    drawLapiz(draw.canvas,draw.currentpoints[len(draw.currentpoints)-1])
+    draw.strokes.append(toStick(draw.completePoints(draw.currentpoints)))
     if(len(draw.currentpoints)<10):
         clicked3Draw(0)
     draw.currentpoints=[]
+    if(len(draw.strokes)==5):
+        draw.hechoAction()
+    draw.canvas.repaint(0)
 def clicked3Draw( event ):
     global draw
     if len(draw.strokes)>0:
         popped=draw.strokes.pop()
-        draw.canvas.delete("all")
-        draw.drawAllNormal(draw.strokes,"blue")
-##        draw.drawPoints(popped,"gray94")
+        draw.canvas.repaint(0)
 def Resample(pts,n):
    points=pts[:]
    I=PathLength(points)/(n-1)
@@ -1786,7 +1834,7 @@ def getSublineScore(array):
 class ReproductorFrame(CustomFrame):
     canvas=0    
     def __init__(self,master):
-        CustomFrame.__init__(self,master)
+        CustomFrame.__init__(self,master,"área de reproducción")
         self.grid(column=1,row=1,sticky=W+E+N+S)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
@@ -1795,20 +1843,35 @@ class AvatarFrame(CustomFrame):
     canvas=0
     
     def __init__(self,master):
-        CustomFrame.__init__(self,master)
+        CustomFrame.__init__(self,master,"área del avatar")
         self.grid(column=2,row=1,sticky=W+E+N+S)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
-        
+
+global customframes       
 global animator
 global draw
 global reproductor
 global avatar
 global primera
-primera=0
+primera=[]
 animator=0
 draw=0
 w=0
+def drawLapiz(canvas,pt):
+    global primera
+    if len(primera)==0:
+        primera=pt
+    else:
+        canvas.create_line(primera[0],primera[1],pt[0],pt[1],fill ="gray",width=3)
+        primera=pt
+def drawPluma(canvas,pt,color):
+    global primera
+    if len(primera)==0:
+        primera=pt
+    else:
+        canvas.create_line(primera[0],primera[1],pt[0],pt[1],fill =color,width=2)
+        primera=pt
 def drawLines(pt,color):
     global primera
     if primera==0:
@@ -1828,6 +1891,8 @@ def drawEmptyOval(pt,rad,color):
 def drawOvals(pt,color):
     vision.canvas.create_oval(pt[0]-5,pt[1]-5,pt[0]+5,pt[1]+5,fill=color)
 def init():
+    global customframes
+    customframes=[]
     global animator
     global draw
     global reproductor
@@ -1849,10 +1914,15 @@ def init():
     
     fileMenu.add_command(label="Salir")
     
-    fetcher=AnimationFrame(master)
+    animator=AnimationFrame(master)
     draw=DrawFrame(master)
     reproductor=ReproductorFrame(master)
     avatar=AvatarFrame(master)
+    customframes.append(animator)
+    customframes.append(draw)
+    customframes.append(reproductor)
+    customframes.append(avatar)
+    
     infotoolbar=Frame(master,height=60)
     global labelY
     labelY=Label(infotoolbar,width=20)
