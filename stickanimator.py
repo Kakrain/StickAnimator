@@ -1202,6 +1202,8 @@ def basis_factory(degree):
     basis_function.degree = degree
     return basis_function
 def BezierSpline(d,K,N):
+    if(len(d)<=1):
+        return d
     n = K
     V = make_knot_vector(n, len(d))
     C = C_factory(d, V, n)
@@ -1335,7 +1337,7 @@ class controlPoint(object):
             offset=[[x-self.draw.strokes[i][j][0]],[y-self.draw.strokes[i][j][1]]]
             self.draw.strokes[i][j][0]=x
             self.draw.strokes[i][j][1]=y
-##            self.draw.limitPoint(i,j)
+##           self.draw.limitPoint(i,j)
             self.moveBackwards(i,j)
             self.dragForward(i,j,offset)
         self.draw.limitAllNF()  
@@ -1351,11 +1353,6 @@ class controlPoint(object):
             newstroke.append(self.draw.strokes[i][index])
         self.draw.strokes[i]=toStick(newstroke)
     def dragForward(self,i,j,offset):
-        if i==0:
-            for m in range(0,j):
-                self.draw.strokes[i][m][0]+=offset[0]
-                self.draw.strokes[i][m][1]+=offset[1]
-            return
         for m in range(j+1,len(self.draw.strokes[i])):
             self.draw.strokes[i][m][0]+=offset[0]
             self.draw.strokes[i][m][1]+=offset[1]
@@ -1370,10 +1367,7 @@ class controlPoint(object):
         
 
     def moveBackwards(self,i,j):
-        if i==0:
-            self.moveForward(i,j)
-            return
-        if(j-1<0):
+        if(j-2<0):
             return
         p0=self.draw.strokes[i][j-2]
         pf=self.draw.strokes[i][j]
@@ -1514,12 +1508,12 @@ class DrawFrame(CustomFrame):
             c=Centroid(self.strokes[i])
             if(i==0):
                 cuello=self.getCuello(self.strokes[i])
-                delta=[cuello[0]-self.strokes[i][len(self.strokes[i])-1][0],cuello[1]-self.strokes[i][len(self.strokes[i])-1][1]]
+                delta=[cuello[0]-self.strokes[i][0][0],cuello[1]-self.strokes[i][0][1]]
             else:
-                jointArms=self.strokes[0][3]
-                jointLegs=self.strokes[0][0]
-                distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][len(self.strokes[i])-1]))
-                distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][len(self.strokes[i])-1]))
+                jointArms=self.strokes[0][1]
+                jointLegs=self.strokes[0][-1]
+                distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][-1]))
+                distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][-1]))
                 if(distancearms<distancelegs):
                     delta=[jointArms[0]-self.strokes[i][0][0],jointArms[1]-self.strokes[i][0][1]]
                 else:
@@ -1530,13 +1524,13 @@ class DrawFrame(CustomFrame):
             c=Centroid(self.strokes[i])
             if(i==0):
                 cuello=self.getCuello(self.strokes[i])
-                delta=[cuello[0]-self.strokes[i][len(self.strokes[i])-1][0],cuello[1]-self.strokes[i][len(self.strokes[i])-1][1]]
+                delta=[cuello[0]-self.strokes[i][0][0],cuello[1]-self.strokes[i][0][1]]
             else:
                 if(i==1 or i==2):
-                    jointArms=self.strokes[0][3]
+                    jointArms=self.strokes[0][1]
                     delta=[jointArms[0]-self.strokes[i][0][0],jointArms[1]-self.strokes[i][0][1]]
                 else:
-                    jointLegs=self.strokes[0][0]
+                    jointLegs=self.strokes[0][-1]
                     delta=[jointLegs[0]-self.strokes[i][0][0],jointLegs[1]-self.strokes[i][0][1]]
             self.strokes[i]=TranslateTo(self.strokes[i],[c[0]+delta[0],c[1]+delta[1]])
     def normalize(self,points):
@@ -1552,11 +1546,11 @@ class DrawFrame(CustomFrame):
         return newpoints
     def numBrazos(self):
         num=0
-        jointArms=self.strokes[0][3]
-        jointLegs=self.strokes[0][0]
+        jointArms=self.strokes[0][1]
+        jointLegs=self.strokes[0][-1]
         for i in range(1,len(self.strokes)):
-            distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][len(self.strokes[i])-1]))
-            distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][len(self.strokes[i])-1]))
+            distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][-1]))
+            distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][-1]))
             if(distancearms<distancelegs):
                 num+=1
         return num
@@ -1566,20 +1560,20 @@ class DrawFrame(CustomFrame):
         newpoints=points[:]
         if len(self.strokes)==0:
             ch=Centroid(self.head)
-            if(Distance(ch,newpoints[len(newpoints)-1])>Distance(ch,newpoints[0])):
+            if(Distance(ch,newpoints[-1])<=Distance(ch,newpoints[0])):
                 newpoints.reverse()
             newpoints=self.arreglarCuello(newpoints)
             return newpoints
-        jointArms=self.strokes[0][3]
-        jointLegs=self.strokes[0][0]
-        distancearms=min(Distance(jointArms,newpoints[0]),Distance(jointArms,newpoints[len(newpoints)-1]))
-        distancelegs=min(Distance(jointLegs,newpoints[0]),Distance(jointLegs,newpoints[len(newpoints)-1]))
+        jointArms=self.strokes[0][1]
+        jointLegs=self.strokes[0][-1]
+        distancearms=min(Distance(jointArms,newpoints[0]),Distance(jointArms,newpoints[-1]))
+        distancelegs=min(Distance(jointLegs,newpoints[0]),Distance(jointLegs,newpoints[-1]))
         if(self.numPiernas()>=2 or (distancearms<distancelegs and self.numBrazos()<2)):
-            if(Distance(jointArms,newpoints[0])>Distance(jointArms,newpoints[len(newpoints)-1])):
+            if(Distance(jointArms,newpoints[0])>Distance(jointArms,newpoints[-1])):
                 newpoints.reverse()
             newpoints.insert(0,jointArms)
         else:
-            if(Distance(jointLegs,newpoints[0])>Distance(jointLegs,newpoints[len(newpoints)-1])):
+            if(Distance(jointLegs,newpoints[0])>Distance(jointLegs,newpoints[-1])):
                 newpoints.reverse()
             newpoints.insert(0,jointLegs)
         return newpoints
@@ -1611,8 +1605,8 @@ class DrawFrame(CustomFrame):
         self.ordenarBody()
         self.finished=True
         self.controlPoints=[controlEyes(self,[0,0]),
-                            controlPoint(self,[[0,3],[1,0],[2,0]]),
-                            controlPoint(self,[[0,0],[3,0],[4,0]]),
+                            controlPoint(self,[[0,1],[1,0],[2,0]]),
+                            controlPoint(self,[[0,4],[3,0],[4,0]]),
                             controlPoint(self,[[1,2]]),
                             controlPoint(self,[[1,4]]),
                             controlPoint(self,[[2,2]]),
@@ -1626,9 +1620,11 @@ class DrawFrame(CustomFrame):
     def estaDentroCabeza(self,p,c,rad):
         return Distance(p,c)<=rad
     def getCuello(self,points):
+        if(len(points)==0):
+            return points
         c=Centroid(self.head)
         rad=Distance(self.head[0],self.head[len(self.head)/2])/2
-        start=points[-1]
+        start=points[0]
         end=c
         delta=[end[0]-start[0],end[1]-start[1]]
         p=1-(float(rad)/Distance(start,end))
@@ -1638,9 +1634,9 @@ class DrawFrame(CustomFrame):
         newpoints=points[:]
         c=Centroid(self.head)
         rad=Distance(self.head[0],self.head[len(self.head)/2])/2
-        while(self.estaDentroCabeza(newpoints[-1],c,rad)):
-            newpoints=newpoints[:-1]
-        newpoints.append(self.getCuello(newpoints))
+        while(len(newpoints)>0 and self.estaDentroCabeza(newpoints[0],c,rad)):
+            newpoints = newpoints[1:]
+        newpoints.insert(0,self.getCuello(newpoints))
         return newpoints
     def editAction(self):
         self.bottomButton.config(text="Hecho!",command=self.hechoAction)
@@ -1699,8 +1695,8 @@ class DrawFrame(CustomFrame):
     def ordenarBody(self):
         brazos=[]
         newstrokes=[self.strokes[0]]
-        jointArms=self.strokes[0][3]
-        jointLegs=self.strokes[0][0]
+        jointArms=self.strokes[0][1]
+        jointLegs=self.strokes[0][-1]
         for i in range(1,len(self.strokes)):
             distancearms=min(Distance(jointArms,self.strokes[i][0]),Distance(jointArms,self.strokes[i][len(self.strokes[i])-1]))
             distancelegs=min(Distance(jointLegs,self.strokes[i][0]),Distance(jointLegs,self.strokes[i][len(self.strokes[i])-1]))
@@ -1875,7 +1871,7 @@ def releaseDraw(event):
     draw.currentpoints.append([event.x,event.y])
     drawLapiz(draw.canvas,draw.currentpoints[len(draw.currentpoints)-1])
     draw.strokes.append(toStick(draw.completePoints(draw.currentpoints)))
-    if(len(draw.currentpoints)<10):
+    if(len(draw.currentpoints)<10 or len(draw.strokes[len(draw.strokes)-1])<=1):
         clicked3Draw(0)
     draw.currentpoints=[]
     if(len(draw.strokes)==5):
@@ -2188,7 +2184,5 @@ class WaitScreen(Tk):
     def terminar(self):
         global tasks
         tasks.append(self.destroy)
-##try_mainloop()
-##initcall()
 init()
 new_mainloop()
