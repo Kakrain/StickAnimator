@@ -1317,8 +1317,92 @@ class AnimationFrame(CustomFrame):
         self.grid(column=0,row=0,columnspan=3,sticky=W+E)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
+
+class controlPoint(object):
+    rad=10
+    locations=[]
+    draw=0
+    color="red"
+    def __init__(self,draw,locs=[]):
+        self.locations=locs
+        self.draw=draw
+    def isSelected(self,x,y):
+        return Distance([x,y],self.draw.strokes[self.locations[0][0]][self.locations[0][1]])<=self.rad
+    def moveTo(self,x,y):
+        for l in self.locations:
+            i=l[0]
+            j=l[1]
+            offset=[[x-self.draw.strokes[i][j][0]],[y-self.draw.strokes[i][j][1]]]
+            self.draw.strokes[i][j][0]=x
+            self.draw.strokes[i][j][1]=y
+##            self.draw.limitPoint(i,j)
+            self.moveBackwards(i,j)
+            self.dragForward(i,j,offset)
+        self.draw.limitAllNF()  
+            
+##            self.moveChain(i,j)
+    def moveChain(self,i,j):
+        ind=[0,2,4]
+        if not(j in ind):
+            ind.append(j)
+            ind.sort()
+        newstroke=[]
+        for index in ind:
+            newstroke.append(self.draw.strokes[i][index])
+        self.draw.strokes[i]=toStick(newstroke)
+    def dragForward(self,i,j,offset):
+        if i==0:
+            for m in range(0,j):
+                self.draw.strokes[i][m][0]+=offset[0]
+                self.draw.strokes[i][m][1]+=offset[1]
+            return
+        for m in range(j+1,len(self.draw.strokes[i])):
+            self.draw.strokes[i][m][0]+=offset[0]
+            self.draw.strokes[i][m][1]+=offset[1]
+    def moveForward(self,i,j):
+        if(j+2>=len(self.draw.strokes[i])):
+            return
+        p0=self.draw.strokes[i][j+2]
+        pf=self.draw.strokes[i][j]
+        pm=[(p0[0]+pf[0])/2,(p0[1]+pf[1])/2]
+        self.draw.strokes[i][j+1][0]=pm[0]
+        self.draw.strokes[i][j+1][1]=pm[1]
         
 
+    def moveBackwards(self,i,j):
+        if i==0:
+            self.moveForward(i,j)
+            return
+        if(j-1<0):
+            return
+        p0=self.draw.strokes[i][j-2]
+        pf=self.draw.strokes[i][j]
+        pm=[(p0[0]+pf[0])/2,(p0[1]+pf[1])/2]
+        self.draw.strokes[i][j-1][0]=pm[0]
+        self.draw.strokes[i][j-1][1]=pm[1]
+    def drawCP(self):
+        p=self.draw.strokes[self.locations[0][0]][self.locations[0][1]]
+        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)
+class controlEyes(controlPoint):
+    def getPosition(self):
+        c=Centroid(self.draw.head)
+        diametro=Distance(self.draw.head[0],self.draw.head[int(len(self.draw.head)/2)])
+        r=diametro/2
+        return [c[0]+self.locations[0]*r,c[1]+self.locations[1]*r]
+    def isSelected(self,x,y):
+        return Distance([x,y],self.getPosition())<=self.rad
+    def moveTo(self,x,y):
+        diametro=Distance(self.draw.head[0],self.draw.head[int(len(self.draw.head)/2)])
+        rad=diametro/2
+        if(Distance([x,y],Centroid(self.draw.head))>rad):
+            return
+        c=Centroid(self.draw.head)
+        self.locations[0]=(x-c[0])/rad
+        self.locations[1]=(y-c[1])/rad
+    def drawCP(self):
+        p=self.getPosition()
+        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)
+        
 class DrawFrame(CustomFrame):
     canvas=0
     strokes=0
@@ -1329,6 +1413,8 @@ class DrawFrame(CustomFrame):
     lastsize=[]
     finished=False
     controlPoints=0
+    selectedCP=0
+    proportions=0
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de dibujo")
         self.grid(column=0,row=1,sticky=W+E+N+S)
@@ -1337,9 +1423,9 @@ class DrawFrame(CustomFrame):
         self.currentpoints=[]
         self.body=[]
         self.strokes=[]
-        self.head=getCircle(12*0.01,250)
-        self.head=TranslateTo(self.head,[self.canvas.winfo_width()*0.5,self.canvas.winfo_height()*0.26])
-        self.controlPoints=[Centroid(self.head)]
+        self.head=getCircle(9*0.01,250)
+        self.proportions=[0.58,0.67,0.67,0.89,0.89]
+        self.head=TranslateTo(self.head,[self.canvas.winfo_width()*0.5,self.canvas.winfo_height()*0.20])
         self.lastsize=[float(self.canvas.winfo_width()),float(self.canvas.winfo_height())]
         self.canvas.topaint.append(self.redraw)
         self.canvas.bind( "<B1-Motion>", paintDraw )
@@ -1347,19 +1433,83 @@ class DrawFrame(CustomFrame):
         self.canvas.bind( "<ButtonRelease-1>", releaseDraw )
         self.canvas.bind( "<Button-3>", clicked3Draw )
         self.config(cursor="pencil")
+    def limitAll(self):
+        for i in range(len(self.strokes)):
+            for j in range(len(self.strokes[i])):
+                self.limitPoint(i,j)
+    def limitAllNF(self):
+        for i in range(len(self.strokes)):
+            for j in range(len(self.strokes[i])):
+                self.limitPointNF(i,j)
+    
+    def limitPointNF(self,i,j):
+        if j==0:
+            return
+        maxl=self.getMaxLength(i)
+        maxl=maxl/(len(self.strokes[i])-1)
+        pi=self.strokes[i][j-1]
+        pf=self.strokes[i][j]
+        d=Distance(pi,pf)
+        if d<=maxl:
+            return
+        pd=[pf[0]-pi[0],pf[1]-pi[1]]
+        m=maxl/d
+        end=[pi[0]+pd[0]*m,pi[1]+pd[1]*m]
+        offset=[end[0]-self.strokes[i][j][0],end[1]-self.strokes[i][j][1]]
+        self.strokes[i][j]=end
+    def limitPoint(self,i,j):
+        if j==0:
+            return
+        maxl=self.getMaxLength(i)
+        maxl=maxl/(len(self.strokes[i])-1)
+        pi=self.strokes[i][j-1]
+        pf=self.strokes[i][j]
+        d=Distance(pi,pf)
+        if d<=maxl:
+            return
+        pd=[pf[0]-pi[0],pf[1]-pi[1]]
+        m=maxl/d
+        end=[pi[0]+pd[0]*m,pi[1]+pd[1]*m]
+        offset=[end[0]-self.strokes[i][j][0],end[1]-self.strokes[i][j][1]]
+        for n in range(j,len(self.strokes[i])):
+            self.strokes[i][n][0]+=offset[0]
+            self.strokes[i][n][1]+=offset[1]
+        
+    def limitStroke(self,i):
+        maxl=self.getMaxLength(i)
+        actl=0
+        for j in range(1,len(self.strokes[i])):
+           actl+=Distance(self.strokes[i][j],self.strokes[i][j-1])
+        if actl<=maxl:
+            return
+        m=maxl/actl
+        c=Centroid(self.strokes[i])
+        newstrokes=self.strokes[i]
+        newstrokes=TranslateTo(newstrokes,[0,0])
+        for j in range(len(newstrokes)):
+            newstrokes[j]*=m
+        newstrokes=TranslateTo(newstrokes,c)
+        self.strokes[i]=newstrokes
+    def getMaxLength(self,i):
+        diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
+        length=diametro*2.4
+        return self.proportions[i]*length
     def dibujarOjos(self):
         diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
         rad=diametro/2
-        radOjos=diametro/5
+        radOjos=diametro/10
         fullsep=diametro/3
         c=Centroid(self.head)
-        sep=fullsep*(float((rad-(c[0]-self.controlPoints[0][0])))/rad)
-        x=self.controlPoints[0][0]
-        y=self.controlPoints[0][1]
+        sep=fullsep*(1-abs(self.controlPoints[0].locations[0]))
+        x=c[0]+self.controlPoints[0].locations[0]*rad
+        y=c[1]+self.controlPoints[0].locations[1]*rad
         r=radOjos
         self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline="black", width=3)
         self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline="black", width=3)
     def normalizePositionAll(self):
+        if self.finished:
+            self.normalizePositionAllFinished()
+            return
         for i in range(len(self.strokes)):
             c=Centroid(self.strokes[i])
             if(i==0):
@@ -1375,7 +1525,20 @@ class DrawFrame(CustomFrame):
                 else:
                     delta=[jointLegs[0]-self.strokes[i][0][0],jointLegs[1]-self.strokes[i][0][1]]
             self.strokes[i]=TranslateTo(self.strokes[i],[c[0]+delta[0],c[1]+delta[1]])
-                                    
+    def normalizePositionAllFinished(self):
+        for i in range(len(self.strokes)):
+            c=Centroid(self.strokes[i])
+            if(i==0):
+                cuello=self.getCuello(self.strokes[i])
+                delta=[cuello[0]-self.strokes[i][len(self.strokes[i])-1][0],cuello[1]-self.strokes[i][len(self.strokes[i])-1][1]]
+            else:
+                if(i==1 or i==2):
+                    jointArms=self.strokes[0][3]
+                    delta=[jointArms[0]-self.strokes[i][0][0],jointArms[1]-self.strokes[i][0][1]]
+                else:
+                    jointLegs=self.strokes[0][0]
+                    delta=[jointLegs[0]-self.strokes[i][0][0],jointLegs[1]-self.strokes[i][0][1]]
+            self.strokes[i]=TranslateTo(self.strokes[i],[c[0]+delta[0],c[1]+delta[1]])
     def normalize(self,points):
         c=Centroid(points)
         newpoints=TranslateTo(points,[0,0])
@@ -1428,7 +1591,10 @@ class DrawFrame(CustomFrame):
         self.drawAllNormal(self.strokes,"black")
         self.drawPoints(self.head,"black")
         self.lastsize=[float(self.canvas.winfo_width()),float(self.canvas.winfo_height())]
-##        self.dibujarOjos()
+        if self.finished:
+            self.dibujarOjos()
+            for cp in self.controlPoints:
+                cp.drawCP()
     def isHuman(self):
         return len(self.strokes)==6
     def hechoAction(self):
@@ -1436,8 +1602,27 @@ class DrawFrame(CustomFrame):
         self.canvas.unbind("<Button-1>")
         self.canvas.unbind("<ButtonRelease-1>")
         self.canvas.unbind("<Button-3>")
+        
+        self.canvas.bind( "<B1-Motion>", self.selectMove )
+        self.canvas.bind( "<Button-1>", self.selectClick)
+        self.canvas.bind( "<ButtonRelease-1>", self.selectRelease )
+        
         self.config(cursor="arrow")
         self.ordenarBody()
+        self.finished=True
+        self.controlPoints=[controlEyes(self,[0,0]),
+                            controlPoint(self,[[0,3],[1,0],[2,0]]),
+                            controlPoint(self,[[0,0],[3,0],[4,0]]),
+                            controlPoint(self,[[1,2]]),
+                            controlPoint(self,[[1,4]]),
+                            controlPoint(self,[[2,2]]),
+                            controlPoint(self,[[2,4]]),
+                            controlPoint(self,[[3,2]]),
+                            controlPoint(self,[[3,4]]),
+                            controlPoint(self,[[4,2]]),
+                            controlPoint(self,[[4,4]]),
+                            controlPoint(self,[[0,2]])
+                            ]
     def estaDentroCabeza(self,p,c,rad):
         return Distance(p,c)<=rad
     def getCuello(self,points):
@@ -1457,7 +1642,6 @@ class DrawFrame(CustomFrame):
             newpoints=newpoints[:-1]
         newpoints.append(self.getCuello(newpoints))
         return newpoints
-    
     def editAction(self):
         self.bottomButton.config(text="Hecho!",command=self.hechoAction)
         self.config(relief=RIDGE)
@@ -1475,6 +1659,18 @@ class DrawFrame(CustomFrame):
     def drawAllNormal(self,All,color):
         for a in All:
             self.drawPoints(toSpline(a),color)
+    def selectClick(self,evt):
+        for cp in self.controlPoints:
+            if(cp.isSelected(evt.x,evt.y)):
+                self.selectedCP=cp
+                break
+    def selectMove(self,evt):
+        if self.selectedCP==0:
+            return
+        self.selectedCP.moveTo(evt.x,evt.y)
+        self.canvas.repaint(0)
+    def selectRelease(self,evt):
+        self.selectedCP=0    
     def drawAllSmooth(self,All,color):
         for a in All:
             self.drawPoints(a,color)
@@ -1643,6 +1839,8 @@ def ordenarStroke(stroke):
 def toSpline(points):
     num=20
     return BezierSpline(points,2,num)#bspline2D(np.array(points),2,100)
+def toShownStick(points):
+    return BezierSpline(points,2,3)
 def toStick(points):
     return BezierSpline(points,2,5)#3,4
 def paintDraw(event):
@@ -1682,7 +1880,9 @@ def releaseDraw(event):
     draw.currentpoints=[]
     if(len(draw.strokes)==5):
         draw.hechoAction()
+    draw.limitAll()
     draw.canvas.repaint(0)
+    
 def clicked3Draw( event ):
     global draw
     if len(draw.strokes)>0:
