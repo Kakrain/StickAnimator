@@ -26,623 +26,6 @@ import gc
 
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
-class Animation(object):
-    videolen=-1
-    videoi=-1
-    videoframe=0
-    video=0
-    videostring=0
-    filename=""
-    Hradius=15
-    Eradius=3
-    normh=0
-    normw=0
-    sep=12
-    kineticGraph=0
-    lagunaGraph=0
-    curves=[]
-    raw=[]
-    frames=[]
-    scale=-0.1
-    toremove=0
-    currenti=0
-    frameRate=0
-    colors=["blue","red","green","orange","black","brown","cyan","purple"]
-    strokesraw=[4,9,16,23,27,34]
-    framesc3d=[]
-    strokes=[4,9,16,23,27,34]##2 primeros son los ojos
-    currenti=0
-    slidei=0
-    linked=False
-    tomerge=[]
-    estadisticas=[]
-    matrices=0
-    tomerge.append([0,1])
-    tomerge.append([2,1])
-    tomerge.append([4,4])
-    tomerge.append([11,3])
-    tomerge.append([18,3])
-    tomerge.append([23,3])
-    tomerge.append([30,3])
-    tomerge.append([37,3])
-    video=0
-    def setVideo(self,vid):
-        self.video=vid
-    def __init__(self,filename,onmarch,waits,value):
-        self.videolen=-1
-        self.videoi=-1
-        self.videoframe=0
-        self.video=0
-        self.videostring=0
-        if filename==None:
-            return
-        self.normh=200
-        self.normw=15
-        self.strokes=[1,2,3,7,11,12,16]
-        self.video=0
-        self.matrices=[]
-        self.toremove=[]
-        self.currenti=0
-        filename=str(filename)
-        self.filename=filename
-        fid = open(filename, 'rb')       # open file for reading in binary format
-        bytes = fid.read(512)
-        buf = StringIO(bytes)
-        firstBlockParameterSection, fmt = unpack('BB', buf.read(2))
-        firstBlockByte = 512*(firstBlockParameterSection - 1) + 2
-        fid.seek(firstBlockByte)
-        nparameter_blocks, processor = unpack('BB', fid.read(2))
-        processor = processor - 83
-        buf.read(18)
-        self.frameRate = getFloat(buf.read(4), processor)        
-        reader = btk.btkAcquisitionFileReader()
-        reader.SetFilename(filename)
-        acq = reader.GetOutput()
-        acq.Update()
-        self.raw=np.empty((3, acq.GetPointFrameNumber(), 1))
-        for i in range(0, acq.GetPoints().GetItemNumber()):
-            label = acq.GetPoint(i).GetLabel()
-            self.raw = np.dstack((self.raw, acq.GetPoint(label).GetValues().T))
-        self.raw = self.raw.T
-        self.raw = np.delete(self.raw, 0, axis=0)
-        self.raw[self.raw==0] = np.NaN
-        if(onmarch):
-            self.preparar()
-        else:
-            self.procesar()
-            self.simplify()
-            self.decompose()
-            self.splineCurvas(waits,value)
-    def getRaw(self,i):
-        i=i+1
-        frame=[]
-        for xi in self.raw:
-            x, y, z = xi[:i].T
-            vec=[self.scale*float(x[-1:]),self.scale*float(y[-1:]),self.scale*float(z[-1:])]
-            frame.append(vec)
-        return frame
-    def preparar(self):
-        for i in range(-90,90,5):
-            self.matrices.append(rotation_matrix([0,0,1],i*math.pi/180))
-        self.initialrotation=rotation_matrix([1,0,0],math.pi/2)
-        self.kineticGraph=GraphOnMarch()
-        self.lagunaGraph=GraphOnMarch()
-        for h in range(0,len(self.tomerge)):
-            for g in range(1,self.tomerge[h][1]+1):
-                self.toremove.append(self.tomerge[h][0]+g)
-    def procesarRawActual(self,rawframe):
-        self.frames.append(rawframe)
-        self.framesc3d.append(rawframe[:]) 
-        spf=1/self.frameRate
-        self.centrarFrame(self.currenti)
-##        self.corregirRotacionFrame(self.currenti,self.matrices)
-        self.homologarEscalaFrame(self.currenti)
-##        
-##        self.kineticGraph.addValue(kineticEnergy(self.framesc3d[self.currenti][:],self.framesc3d[self.currenti-1][:],spf))
-##        self.lagunaGraph.addValue(kineticEnergy(self.framesc3d[self.currenti][:],self.framesc3d[0][:],spf))
-    def simplifyFrame(self,num):
-        frame=self.frames[num]
-        for i in range(0,len(frame)):
-            for h in range(0,len(self.tomerge)):
-                if(i==self.tomerge[h][0]):
-                    for g in range(1,self.tomerge[h][1]+1):
-                        frame[i][0]+=frame[i+g][0]
-                        frame[i][1]+=frame[i+g][1]
-                        frame[i][2]+=frame[i+g][2]
-                    frame[i][0]/=self.tomerge[h][1]+1
-                    frame[i][1]/=self.tomerge[h][1]+1
-                    frame[i][2]/=self.tomerge[h][1]+1
-        newframe=[]
-        for j in range(0,len(frame)):
-            if (not(j in self.toremove)):
-                newframe.append(frame[j])
-        
-
-        for frame in self.frames:
-            for i in range(0,3):
-                newframe[1][i]+=newframe[0][i]
-                newframe[1][i]/=2
-
-        self.frames[num]=newframe
-    def isAnimationFinished(self):
-        return self.currenti>len(self.raw[0])-2
-    def nextFrame(self):
-        if self.isAnimationFinished():
-            return
-        if(self.currenti==len(self.curves) and len(self.curves)!=len(self.raw[0]-2)):
-            rawframe=self.getRaw(self.currenti)
-            self.procesarRawActual(rawframe)
-            self.simplifyFrame(self.currenti)
-            self.decomposeFrame(self.currenti)
-            self.splineCurva(self.currenti,2,10)
-            
-        self.dibujarFrame(self.slidei)
-        self.dibujarCurva(self.currenti)
-        self.dibujarVideo(self.currenti)
-        self.dibujarProgreso()
-
-    def homologarEscalaFrame(self,num):
-        frame=self.frames[num]
-        h=self.getHeigthFrame(frame)
-        w=math.sqrt(((frame[8][1]-frame[4][1])**2)+((frame[8][0]-frame[4][0])**2)+((frame[8][2]-frame[4][2])**2))
-        self.reescalarFrame(num,self.normh/h,self.normw/w)
-    def reescalarFrame(self,num,sch,scxy):
-        for i in range(0,len(self.frames[num])):
-            self.frames[num][i][0]*=scxy
-            self.framesc3d[num][i][0]*=scxy
-            self.frames[num][i][1]*=scxy
-            self.framesc3d[num][i][1]*=scxy
-            self.frames[num][i][2]*=sch
-            self.framesc3d[num][i][2]*=sch
-            
-    def splineCurva(self,num,k=3,N=100):    
-        for i in range(2,len(self.curves[num])):
-            points = np.array(self.curves[num][i])
-            self.curves[num][i]=BezierSpline(points,k,N)
-    def getVideoFrame(self,num):
-        q=float(num)/len(self.raw[0])-1
-        q=min(int(q*self.videolen),self.videolen)
-        if(self.videoi>q):
-            self.video.release()
-            self.video=cv2.VideoCapture(self.videostring)
-            self.videoi=0
-            
-            image=self.video.read()
-            image=image[1]
-            im = Image.fromarray(image)
-            im = ImageTk.PhotoImage(image=im)
-            self.videoframe=im
-    
-            return self.getVideoFrame(num)
-        if(self.videoi==q):
-            return self.videoframe
-        while self.videoi<q:
-            image=self.video.read()
-            self.videoi+=1
-        image=image[1]
-        im = Image.fromarray(image)
-        im = ImageTk.PhotoImage(image=im)
-        self.videoframe=im
-        return self.videoframe
-    def dibujarVideo(self,num):
-        if(self.videolen==0):
-            labelvideo.config(text="este es un video",image="")
-            return
-        im=self.getVideoFrame(num)
-        labelvideo.config(text="",image=im)
-        
-    def procesar(self):
-        kineticdiff=[]
-        lagunadiff=[]
-        i=1
-        frameAnt=0
-        while i<len(self.raw[0]):
-            frame=[]
-            framec3d=[]
-            for xi in self.raw:
-                x, y, z = xi[:i].T
-                vec=[self.scale*float(x[-1:]),self.scale*float(y[-1:]),self.scale*float(z[-1:])]
-                frame.append(vec)
-                framec3d.append(vec[:])
-            if(i==1):
-                frameAnt = frame[:]
-            else:
-                v=kineticEnergy(frame[:],frameAnt[:],1/self.frameRate)
-                kineticdiff.append(v)
-                lagunadiff.append(v)
-                frameAnt = frame[:]
-            i+=1
-            
-            self.frames.append(frame)
-            self.framesc3d.append(framec3d)
-        self.kineticGraph=GraphOnMarch()
-        self.kineticGraph.setValues(kineticdiff)
-        self.lagunaGraph=GraphOnMarch()
-        self.lagunaGraph.setValues(lagunadiff)
-##        self.kineticGraph=Graph(kineticdiff,self)
-##        self.lagunaGraph=Graph(lagunadiff,self)
-        self.homologarPosicion()
-##        self.homologarRotacion()
-    def getCenter(self):
-        n=0
-        xyz=[0,0,0]
-        for frame in self.frames:
-            for p in frame:
-                xyz[0]+=p[0]
-                xyz[1]+=p[1]
-                xyz[2]+=p[2]
-                n+=1
-        xyz[0]=xyz[0]/n
-        xyz[1]=xyz[1]/n
-        xyz[2]=xyz[2]/n
-        return xyz
-    def getCenterFrame(self,num):
-        n=0
-        xyz=[0,0,0]
-        for p in self.frames[num]:
-            xyz[0]+=p[0]
-            xyz[1]+=p[1]
-            xyz[2]+=p[2]
-            n+=1
-        xyz[0]=xyz[0]/n
-        xyz[1]=xyz[1]/n
-        xyz[2]=xyz[2]/n
-        return xyz
-    def simplify(self):
-        self.strokes=[1,2,3,7,11,12,16]
-        toremove=[]
-        data=[]
-        for h in range(0,len(self.tomerge)):
-            for g in range(1,self.tomerge[h][1]+1):
-                toremove.append(self.tomerge[h][0]+g)
-        for frame in self.frames:
-            for i in range(0,len(frame)):
-                for h in range(0,len(self.tomerge)):
-                    if(i==self.tomerge[h][0]):
-                        for g in range(1,self.tomerge[h][1]+1):
-                            frame[i][0]+=frame[i+g][0]
-                            frame[i][1]+=frame[i+g][1]
-                            frame[i][2]+=frame[i+g][2]
-                        frame[i][0]/=self.tomerge[h][1]+1
-                        frame[i][1]/=self.tomerge[h][1]+1
-                        frame[i][2]/=self.tomerge[h][1]+1
-        for frame in self.frames:
-            newframe=[]
-            for j in range(0,len(frame)):
-                if (not(j in toremove)):
-                    newframe.append(frame[j])
-            data.append(newframe)
-        self.frames=data
-        for frame in self.frames:
-            for i in range(0,3):
-                frame[1][i]+=frame[0][i]
-                frame[1][i]/=2
-    def getFrame2D(self,num):
-        return self.framesc3d[num][:,1:3]
-    def getCurva2D(self,num):
-        newcurve=[]
-        for i in range(2,len(self.curves[num])):
-            newcurve.append(np.array(self.curves[num][i])[:,1:3])
-        return np.array(newcurve)
-    def dibujarFrame(self,num):
-        pi=0
-        gi=0
-        if (num<0):
-            num=0
-        global primera
-        primera=[]
-        i=0
-        
-        for p in self.framesc3d[num]:
-            point=[int(p[1])+vision.canvas.winfo_width()/2,int(p[2])+vision.canvas.winfo_height()/2]
-            drawLines(point,self.colors[gi])
-            drawOvals(point,self.colors[gi])
-            pi+=1
-            i+=1
-            if(gi<len(self.strokesraw) and pi==self.strokesraw[gi]):
-                primera=[]
-                gi+=1
-    def decompose(self):
-        for frame in self.frames:
-            pi=0
-            gi=0
-            curveframe=[]
-            curve=[]
-            for p in frame:
-                curve.append(p)
-                pi+=1
-                if(gi<len(self.strokes) and pi==self.strokes[gi]):
-                    curveframe.append(curve[:])
-                    curve=[]
-                    gi+=1
-            curveframe.append(curve[:])
-            self.curves.append(curveframe)
-        for curves in self.curves:
-            ##merging the second and fifth point
-            curves[2].append(curves[5][0])
-            del curves[5]
-            
-            ##adding the neck point
-            dx=curves[2][0][0]-curves[1][0][0]
-            dy=curves[2][0][1]-curves[1][0][1]
-            dz=curves[2][0][2]-curves[1][0][2]
-            mv=math.sqrt(dx**2+dy**2+dz**2)
-            t=self.Hradius/mv
-            x=curves[1][0][0]+t*dx
-            y=curves[1][0][1]+t*dy
-            z=curves[1][0][2]+t*dz
-            curves[2].insert(0,[x,y,z])
-
-            ##adding joint points between arms and torso
-            curves[3].insert(0,curves[2][0][:])
-            curves[4].insert(0,curves[2][0][:])
-
-            ##adding joint points between legs and torso
-            curves[5].insert(0,curves[2][len(curves[2])-1][:])
-            curves[6].insert(0,curves[2][len(curves[2])-1][:])
-
-    def decomposeFrame(self,num):
-        pi=0
-        gi=0
-        curveframe=[]
-        curve=[]
-        for p in self.frames[num]:
-            curve.append(p)
-            pi+=1
-            if(gi<len(self.strokes) and pi==self.strokes[gi]):
-                curveframe.append(curve[:])
-                curve=[]
-                gi+=1
-        curveframe.append(curve[:])
-        self.curves.append(curveframe)
-        
-        self.curves[num]
-
-        self.curves[num][2].append(self.curves[num][5][0])
-        del self.curves[num][5]
-            
-        ##adding the neck point
-        dx=self.curves[num][2][0][0]-self.curves[num][1][0][0]
-        dy=self.curves[num][2][0][1]-self.curves[num][1][0][1]
-        dz=self.curves[num][2][0][2]-self.curves[num][1][0][2]
-        mv=math.sqrt(dx**2+dy**2+dz**2)
-        t=self.Hradius/mv
-        x=self.curves[num][1][0][0]+t*dx
-        y=self.curves[num][1][0][1]+t*dy
-        z=self.curves[num][1][0][2]+t*dz
-        self.curves[num][2].insert(0,[x,y,z])
-
-        ##adding joint points between arms and torso
-        self.curves[num][3].insert(0,self.curves[num][2][0][:])
-        self.curves[num][4].insert(0,self.curves[num][2][0][:])
-
-        ##adding joint points between legs and torso
-        self.curves[num][5].insert(0,self.curves[num][2][len(self.curves[num][2])-1][:])
-        self.curves[num][6].insert(0,self.curves[num][2][len(self.curves[num][2])-1][:])
-
-        
-    def dibujarProgreso(self,i):
-        vision.canvas.create_text(vision.canvas.winfo_width()/2, vision.canvas.winfo_height()-10, text=str(i)+'/'+str(len(self.frames)-1))          
-    def dibujarCurva(self,num):
-        if (num<0):
-            num=0
-        global primera
-        p=self.curves[num][1][0]
-        point=[int(p[1])+vision.canvas.winfo_width()/2,int(p[2])+vision.canvas.winfo_height()/2]
-        drawEmptyOval(point,self.Hradius,self.colors[1])
-
-        s=self.sep
-        p=self.curves[num][0][0]
-        s=(1-(abs(p[1]-self.curves[num][1][0][1])/self.Hradius))*s
-        point=[int(p[1])+vision.canvas.winfo_width()/2+int(s/2),int(p[2])+vision.canvas.winfo_height()/2]
-        drawEmptyOval(point,self.Eradius,self.colors[0])
-
-        point=[int(p[1])+vision.canvas.winfo_width()/2-int(s/2),int(p[2])+vision.canvas.winfo_height()/2]
-        drawEmptyOval(point,self.Eradius,self.colors[0])
-        for i in range(2,len(self.curves[num])):
-            primera=0
-            for p in self.curves[num][i]:
-                point=[int(p[1])+vision.canvas.winfo_width()/2,int(p[2])+vision.canvas.winfo_height()/2]
-                drawLines(point,self.colors[i])
-    def splineCurvas(self,waits,val,k=3,N=10):
-        for i in range(len(self.curves)):
-            waits.avanzar(val*(100.0/len(self.curves)),"extrapolando puntos")
-            self.splineCurva(i,k,N)
-    def splineCurva(self,n,k=3,N=100):
-        for curves in self.curves[n]:
-            for i in range(2,len(curves)):
-                points = np.array(curves[i])
-                curves[i]=BezierSpline(points,k,N)
-    def savePose(self,num):
-        archivo = open("pose"+str(num)+".txt", 'w')
-        for p in self.frames[num]:
-            archivo.write(str(p[0])+"/"+str(p[1])+"/"+str(p[2])+"@")
-        archivo.close()
-    def drawKeyFramesWithCurves(self,w):
-        w.delete("all")
-        j=0
-        global primera
-        for i in self.keyframes:
-           primera=0
-           pi=0
-           gi=0
-           frame=[]
-           j+=1
-           p=self.curves[i][1][0]
-           point=[int(p[1])+(j-((j>(len(self.keyframes)/2))*(len(self.keyframes)/2)))*1.1*canvas_width/len(self.keyframes),int(p[2])+(canvas_height/(2-(j>(len(self.keyframes)/2))))]
-           drawEmptyOval(point,self.Hradius,self.colors[1])
-           s=self.sep
-           p=self.curves[i][0][0]
-           s=(1-(abs(p[1]-self.curves[i][1][0][1])/self.Hradius))*s
-           point=[int(p[1])+int(s/2)+(j-((j>len(self.keyframes)/2)*len(self.keyframes)/2))*1.1*canvas_width/len(self.keyframes),int(p[2])+(canvas_height/(2-(j>len(self.keyframes)/2)))]
-           drawEmptyOval(point,self.Eradius,self.colors[0])
-           point=[int(p[1])-int(s/2)+(j-((j>len(self.keyframes)/2)*len(self.keyframes)/2))*1.1*canvas_width/len(self.keyframes),int(p[2])+(canvas_height/(2-(j>len(self.keyframes)/2)))]
-           drawEmptyOval(point,self.Eradius,self.colors[0])
-           for k in range(1,len(self.curves[i])):
-               primera=0
-               for p in self.curves[i][k]:
-                   point=[int(p[1])+(j-((j>len(self.keyframes)/2)*len(self.keyframes)/2))*1.1*canvas_width/len(self.keyframes),int(p[2])+(canvas_height/(2-(j>len(self.keyframes)/2)))]
-                   drawLines(point,self.colors[k])
-           w.update()
-    def drawKeyFrames(self,w):
-        w.delete("all")
-        j=0
-        global primera
-        for i in self.keyframes:
-           primera=0
-           pi=0
-           gi=0
-           frame=[]
-           j+=1
-           for p in self.frames[i]:
-                point=[int(p[1])+(j-((j>len(self.keyframes)/2)*len(self.keyframes)/2))*1.9*canvas_width/len(self.keyframes),int(p[2])+(canvas_height/(2-(j>len(self.keyframes)/2)))]
-                drawLines(point,self.colors[gi])
-                drawOvals(point,self.colors[gi])
-                pi+=1
-                if(gi<6 and pi==self.strokes[gi]):
-                    primera=0
-                    gi+=1
-        w.update()
-    def saveImageFile(self,num):
-        black = (0, 0, 0)
-        white=(255,255,255)
-        image = Image.new("RGB", (canvas_width, canvas_height), white)
-        draw = ImageDraw.Draw(image)
-        if (num<0):
-            num=0
-        global primera
-        p=self.curves[num][1][0]
-        point=[int(p[1])+canvas_width/2,int(p[2])+canvas_height/2]
-        drawEmptyOvalImage(point,self.Hradius,3,draw,black)
-        s=self.sep
-        p=self.curves[num][0][0]
-        s=(1-(abs(p[1]-self.curves[num][1][0][1])/self.Hradius))*s
-        point=[int(p[1])+int(s/2)+canvas_width/2,int(p[2])+canvas_height/2]
-        drawEmptyOvalImage(point,self.Eradius,3,draw,black)
-        point=[int(p[1])-int(s/2)+canvas_width/2,int(p[2])+canvas_height/2]
-        drawEmptyOvalImage(point,self.Eradius,3,draw,black)
-        for i in range(1,len(self.curves[num])):
-            primera=0
-            pi=0
-            gi=0
-            for p in self.curves[num][i]:  
-                point=[int(p[1])+canvas_width/2,int(p[2])+canvas_height/2]
-                drawLinesImage(draw,point,black)
-                pi+=1
-        filename = "pose"+str(num)+".jpg"
-        image.save(filename)
-        os.startfile(filename)
-    def dibujar_curvas(self,canvas):
-        global playing
-        playing=True
-        self.currenti=0
-        thread = threading.Thread(target=self.dibujar_curvas_loop(canvas))
-        thread.daemon = True 
-        thread.start()
-    def dibujar(self,canvas):
-        global playing
-        playing=True
-        self.currenti=0
-        thread = threading.Thread(target=self.dibujar_loop(canvas))
-        thread.daemon = True 
-        thread.start()
-    def rotar(self,axis,theta):
-        frame=self.framesc3d[self.slidei]
-        for i in range(0,len(frame)):
-            frame[i]=np.dot(rotation_matrix(axis,theta),frame[i])
-    def transladar(self,vector):
-        for frame in self.framesc3d:
-            for p in frame:
-                for i in range(0,len(p)):
-                    p[i]+=vector[i]
-    def homologarRotacion(self):
-        matrices=[]
-        for i in range(-90,90,5):
-            matrices.append(rotation_matrix([0,0,1],i*math.pi/180))
-        for i in range(len(self.frames)):
-            self.corregirRotacionFrame(i,matrices)
-##            self.corregirRotacionFrame2(i)
-        
-    def getAngleOffset(self,num):
-        p1=0
-        p2=0
-        maxd=0
-        v=[0,0]
-        for i in range(0,len(self.frames[num])):
-            for j in range(i+1,len(self.frames[num])):
-                dist=(self.frames[num][i][0]-self.frames[num][j][0])**2+(self.frames[num][i][1]-self.frames[num][j][1])**2
-                if(dist>maxd):
-                    maxd=dist
-                    p1=i
-                    p2=j
-        v[0]=(self.frames[num][p2][1]-self.frames[num][p1][1])
-        v[1]=(self.frames[num][p2][0]-self.frames[num][p1][0])
-        return math.atan(v[1]/v[0])
-##        return math.atan2(v[1],v[0])
-    def ponerFrenteFrame(self,num):
-        v=[0,0]
-        v[0]=(self.frames[num][8][1]-self.frames[num][4][1])
-        v[1]=(self.frames[num][8][0]-self.frames[num][4][0])
-        angle=-math.atan2(v[1],v[0])
-        matrix=rotation_matrix([0,0,1],angle)
-        self.framesc3d[num]=self.rotarFrame(self.framesc3d[num],matrix)
-        self.frames[num]=self.rotarFrame(self.frames[num],matrix)
-    def ponerFrenteTodos(self):
-        for i in range(len(self.frames)):
-            self.ponerFrenteFrame(i)
-    def corregirRotacionFrame2(self,num):
-        angle=-self.getAngleOffset(num)
-        matrix=rotation_matrix([0,0,1],angle)
-        self.framesc3d[num]=self.rotarFrame(self.framesc3d[num],matrix)
-        self.frames[num]=self.rotarFrame(self.frames[num],matrix)
-    def corregirRotacionFrame(self,num,matrices):
-        maxw=0
-        besti=0
-        for i in range(len(matrices)):
-            width=self.getWidthFrame(self.rotarFrame(self.framesc3d[num],matrices[i]))
-            if(width>maxw):
-                maxw=width
-                besti=i
-        self.estadisticas.append(abs((besti*5-90)+(self.getAngleOffset(num)*180/math.pi)))
-        self.framesc3d[num]=self.rotarFrame(self.framesc3d[num],matrices[besti])
-        self.frames[num]=self.rotarFrame(self.frames[num],matrices[besti])
-    def getHeigthFrame(self,frame):
-        minv=maxv=0
-        for p in frame:
-            if(p[2]<minv):
-                minv=p[2]
-            if(p[2]>maxv):
-                maxv=p[2]
-        return maxv-minv
-    def getWidthFrame(self,frame):
-        minv=maxv=0
-        for p in frame:
-            if(p[1]<minv):
-                minv=p[1]
-            if(p[1]>maxv):
-                maxv=p[1]
-        return maxv-minv
-##        return (frame[16][1]-frame[9][1])
-        
-    def rotarFrame(self,frame,matrix):
-        return np.dot(frame,matrix)
-    def homologarPosicion(self):
-        for i in range(len(self.frames)):
-            self.centrarFrame(i)
-    def centrarFrame(self,num):
-        center=self.getCenterFrame(num)
-        center[0]=-center[0]/2
-        center[1]=-center[1]/2
-        center[2]=-center[2]/2
-        self.transladarFrame(num,center)
-    def transladarFrame(self,num,vector):
-        for p in self.framesc3d[num]:
-            for i in range(0,len(p)):
-                    p[i]+=vector[i]
-        for p in self.frames[num]:
-            for i in range(0,len(p)):
-                    p[i]+=vector[i]
-
 class CsvNormalizer(object):
     corners=[]#[i,j] where we change previous node of i so it becomes j
     #first element doesnt have previous so its fine whatever value of angle it has
@@ -722,371 +105,6 @@ class CsvNormalizer(object):
                         phi+=2*math.pi
                 angles.append([theta,phi])
         return angles
-
-
-class CsvAnimation(Animation):
-    scale=1
-    frameRate=120
-    initialrotation=0
-    AntFramePosition=0
-    ojospos=0
-    csvnorm=0
-    def toString(self):
-        s=""
-        for i in range(len(self.framesc3d)):
-            s+=str(i)+" "
-            for p in self.framesc3d[i]:
-                for x in p:
-                    s+="{0:.2f}".format(x)+" "
-            s=s[:-1]
-            s+="\n"
-        s=s[:-1]
-        return s        
-    def mapearOjo(self,num):
-        if len(self.ojospos)!=0:
-            self.curves[num][0][0][1]+=self.ojospos[num][0]*self.Hradius
-            self.curves[num][0][0][2]+=self.ojospos[num][1]*self.Hradius
-    def mapearAllOjos(self):
-        for i in range(len(self.curves)):
-            self.mapearOjo(i)
-    def centrarFrame(self,num):
-        center=self.getCenterFrame(num)
-        center[0]=-center[0]
-        center[1]=-center[1]
-        center[2]=-center[2]
-        self.transladarFrame(num,center)
-    def __init__(self,filename,onmarch,waits,val):
-        self.csvnorm=CsvNormalizer()
-        self.videolen=-1
-        self.videoi=0
-        self.videoframe=0
-        self.ojospos=[]
-        self.normh=50
-        self.normw=50
-        Animation.__init__(self,None,onmarch,waits,val)
-        self.currenti=0
-        self.matrices=[]
-        self.toremove=[]
-        self.curves=[]
-        self.frames=[]
-        self.framesc3d=[]
-        self.strokesraw=[4,8,12,16,20]
-        self.strokes=[2,4,8,12,15,19]
-        self.tomerge=[]
-        self.tomerge.append([14,1])
-        self.tomerge.append([18,1])    
-        
-        self.filename=filename
-        csvreader = csv.reader(open(filename,'r'), delimiter='\t')
-        self.raw=[]
-        i=-1
-        ant=0
-        fpsant=0
-        promspf=0
-        n=0
-        if(onmarch):
-            rawrows=[]
-            for row in csvreader:
-                if i==-1:
-                    i=0
-                    continue
-                v=row[0].split(",")
-                if(ant!=v[0]):
-                    ant=v[0]
-                    fpsant=int(v[2])
-                    self.raw.append([])
-                self.raw[len(self.raw)-1].append(row)
-            self.preparar() 
-        else:
-            for row in csvreader:
-                if i==-1:
-                    i=0
-                    continue
-                v=row[0].split(",")
-                if(ant!=v[0]):
-                    ant=v[0]
-                    if(not fpsant==0):
-                        promspf+=abs(int(v[2])-fpsant)
-                        n+=1
-                    fpsant=int(v[2])
-                    self.raw.append([])
-                self.raw[len(self.raw)-1].append([float(v[8]),float(v[9]),float(v[10])])
-            promspf/=n
-            self.frameRate =1/(promspf*0.0001)
-            
-            self.procesar()
-            self.simplify()
-            self.decompose()
-##            self.splineCurvas(waits,val)
-            self.mapearAllOjos()
-    def getHeigthFrame(self,frame):
-        return math.sqrt((frame[1][0]-frame[2][0])**2+(frame[1][1]-frame[2][1])**2+(frame[1][2]-frame[2][2])**2)
-    def getWidthFrame(self,frame):
-        minv=maxv=0
-        for p in frame:
-            if(p[1]<minv):
-                minv=p[1]
-            if(p[1]>maxv):
-                maxv=p[1]
-        return maxv-minv
-##        return (frame[8][1]-frame[4][1])
-    def preparar(self):
-        for i in range(-90,90,5):
-            self.matrices.append(rotation_matrix([0,0,1],i*math.pi/180))
-        self.initialrotation=rotation_matrix([1,0,0],math.pi/2)
-        self.kineticGraph=GraphOnMarch()
-        self.lagunaGraph=GraphOnMarch()
-        for h in range(0,len(self.tomerge)):
-            for g in range(1,self.tomerge[h][1]+1):
-                self.toremove.append(self.tomerge[h][0]+g)
-    def isAnimationFinished(self):
-        return self.currenti>len(self.raw)-1
-    def nextFrame(self):
-        if self.isAnimationFinished():
-            stop()
-            return
-        if(self.currenti==len(self.curves) and len(self.curves)!=len(self.raw)):
-            rawframe=self.raw[self.currenti]
-            self.procesarRawActual(rawframe)
-            self.simplifyFrame(self.currenti)
-            self.decomposeFrame(self.currenti)
-            self.splineCurva(self.currenti,2,10)
-            self.mapearOjo(self.currenti)
-        self.dibujarFrame(self.slidei)
-        self.dibujarCurva(self.currenti)
-        self.dibujarVideo(self.currenti)
-        self.dibujarProgreso()
-    def getVideoFrame(self,num):
-        q=float(num)/(len(self.raw)-1)
-        q=min(int(q*self.videolen),self.videolen-1)
-        if(self.videoi>q):
-            self.video.release()
-            self.video=cv2.VideoCapture(self.videostring)
-            self.videoi=0
-        
-            image=self.video.read()
-            image=image[1]
-            im = Image.fromarray(image)
-            im = ImageTk.PhotoImage(image=im)
-            self.videoframe=im
-            
-            return self.getVideoFrame(num)
-        if(self.videoi==q):
-            return self.videoframe
-        while self.videoi<q:
-            image=self.video.read()
-            self.videoi+=1
-        image=image[1]
-        im = Image.fromarray(image)
-        im = ImageTk.PhotoImage(image=im)
-        self.videoframe=im
-        return self.videoframe
-    def procesarRawActual(self,rawframe):
-        frame=[]
-        framec3d=[]
-        v=rawframe[0][0].split(",")
-        spf=(self.AntFramePosition-int(v[2]))*0.001
-        if(spf<0):
-            spf+=1
-        self.AntFramePosition=int(v[2])
-        for row in rawframe:
-            v=row[0].split(",")
-            frame.append([float(v[8]),float(v[9]),float(v[10])])
-            framec3d.append([float(v[8]),float(v[9]),float(v[10])])
-        self.frames.append(frame)
-        self.framesc3d.append(framec3d) 
-
-        self.centrarFrame(self.currenti)
-        self.frames[self.currenti]=self.rotarFrame(self.frames[self.currenti][:],self.initialrotation)[:]
-        self.framesc3d[self.currenti]=self.rotarFrame(self.framesc3d[self.currenti][:],self.initialrotation)[:]
-
-
-##        self.corregirRotacionFrame(self.currenti,self.matrices)
-        self.homologarEscalaFrame(self.currenti)
-        
-##        self.kineticGraph.addValue(kineticEnergy(self.framesc3d[self.currenti][:],self.framesc3d[self.currenti-1][:],spf))
-##        self.lagunaGraph.addValue(kineticEnergy(self.framesc3d[self.currenti][:],self.framesc3d[0][:],spf))
-
-        
-    def simplifyFrame(self,num):
-        frame=self.frames[num]
-        for i in range(0,len(frame)):
-            for h in range(0,len(self.tomerge)):
-                if(i==self.tomerge[h][0]):
-                    for g in range(1,self.tomerge[h][1]+1):
-                        frame[i][0]+=frame[i+g][0]
-                        frame[i][1]+=frame[i+g][1]
-                        frame[i][2]+=frame[i+g][2]
-                    frame[i][0]/=self.tomerge[h][1]+1
-                    frame[i][1]/=self.tomerge[h][1]+1
-                    frame[i][2]/=self.tomerge[h][1]+1
-        newframe=[]
-        for j in range(0,len(frame)):
-            if (not(j in self.toremove)):
-                newframe.append(frame[j])
-        self.frames[num]=newframe
-    def decomposeFrame(self,num):
-        pi=0
-        gi=0
-        curveframe=[]
-        curve=[]
-        for p in self.frames[num]:
-            curve.append(p)
-            pi+=1
-            if(gi<len(self.strokes) and pi==self.strokes[gi]):
-                curveframe.append(curve[:])
-                curve=[]
-                gi+=1
-        curveframe.append(curve[:])
-        self.curves.append(curveframe)
-        
-        temp=self.curves[num][0][:]
-        self.curves[num][0]=self.curves[num][1][:]
-        self.curves[num][1]=temp
-
-        self.curves[num][1].append(self.curves[num][0][0][:])
-        del self.curves[num][0][0]
-
-        self.curves[num].insert(0,[[self.curves[num][0][0][0],self.curves[num][0][0][1],self.curves[num][0][0][2]]])
-##        self.curves[num].insert(0,self.curves[num][0][:])
-
-        ##adding the neck point
-        dx=self.curves[num][2][0][0]-self.curves[num][1][0][0]
-        dy=self.curves[num][2][0][1]-self.curves[num][1][0][1]
-        dz=self.curves[num][2][0][2]-self.curves[num][1][0][2]
-        mv=math.sqrt(dx**2+dy**2+dz**2)
-        t=self.Hradius/mv
-        x=self.curves[num][1][0][0]+t*dx
-        y=self.curves[num][1][0][1]+t*dy
-        z=self.curves[num][1][0][2]+t*dz
-        self.curves[num][2].append([x,y,z])
-
-        ##adding joint points between arms and torso
-        self.curves[num][3].insert(0,self.curves[num][2][len(self.curves[num][2])-2][:])
-        self.curves[num][4].insert(0,self.curves[num][2][len(self.curves[num][2])-2][:])
-
-        ##adding joint points between legs and torso
-        self.curves[num][5].insert(0,self.curves[num][2][0][:])
-        self.curves[num][6].insert(0,self.curves[num][2][0][:])
-    def splineCurva(self,num,k=3,N=100):    
-        for i in range(2,len(self.curves[num])):
-            points = np.array(self.curves[num][i])
-            self.curves[num][i]=BezierSpline(points,k,N)
-    def getCenterFrame(self,num):
-        return self.frames[num][0][:]
-    def corregirLados(self):
-        for num in range(len(self.frames)):
-            if(self.frames[num][16][1]-self.frames[num][12][1]<0):
-                matrix=rotation_matrix([0,0,1],math.pi)
-                self.framesc3d[num]=self.rotarFrame(self.framesc3d[num],matrix)
-                self.frames[num]=self.rotarFrame(self.frames[num],matrix)
-    def ponerFrenteTodos(self):
-        for i in range(len(self.frames)):
-            self.ponerFrenteFrame(i)
-    
-    def procesar(self):
-        frameAnt=0
-        for fr in self.raw:
-            frame=[]
-            framec3d=[]
-            for p in fr:
-                vec=[p[0],p[1],p[2]]
-                frame.append(vec)
-                framec3d.append(vec[:])              
-            self.frames.append(frame)
-            self.framesc3d.append(framec3d)
-        self.homologarPosicion()
-        m=rotation_matrix([1,0,0],math.pi/2)
-        for i in range(len(self.frames)):
-            self.frames[i]=self.rotarFrame(self.frames[i],m)
-            self.framesc3d[i]=self.rotarFrame(self.framesc3d[i],m)
-        #N: 1.9226000309 T: 1.91519994736 el nuevo se demora 0.007400083544 segundos mas que el anterior
-        #en promedio el nuevo se demora-0.326600027085segundos (midiendo a partir de 2 puntos arbitrarios)
-##        self.ponerFrenteTodos()
-
-        self.homologarEscala()
-        
-##        self.homologarRotacion()
-        
-        kineticdiff=[]
-        lagunadiff=[]
-        frameAnt=self.frames[0][:]
-##        for i in range(1,len(self.framesc3d)):
-##            if(i!=0):
-##                kineticdiff.append(kineticEnergy(self.framesc3d[i][:],self.framesc3d[i-1][:],1/self.frameRate))
-##                lagunadiff.append(kineticEnergy(self.framesc3d[i][:],self.framesc3d[0][:],1/self.frameRate))
-        self.frames=np.array(self.frames)
-        self.framesc3d=np.array(self.framesc3d)
-    def eliminarAberrantes(self,lagunadiff,kineticdiff):
-        aberranteslag=self.getIndicesAberrantes(lagunadiff,3)
-        aberranteskin=self.getIndicesAberrantes(lagunadiff,3)
-        aberrantes=dict([(a,1) for a in aberranteslag+aberranteskin]).keys()
-        quickSort(aberrantes)
-        aberrantes.reverse()
-        for i in aberrantes:
-            del self.frames[i]
-            del self.framesc3d[i]
-            del kineticdiff[i]
-            del lagunadiff[i]
-            del self.raw[i]
-    def getIndicesAberrantes(self,data,criterio):
-        indices=[]
-        ordenados=data[:]
-        quickSort(ordenados)
-        q1=ordenados[int(len(ordenados)*0.25)]
-        q3=ordenados[int(len(ordenados)*0.75)]
-        RIQ=q3-q1
-        for i in range(len(data)):
-            if data[i]>(q3+criterio*RIQ):
-                indices.append(i)
-        return indices
-    def homologarEscalaFrame(self,num):
-        f=self.csvnorm.normalize(self.frames[num])
-        self.frames[num]=f[:]
-        self.framesc3d[num]=f
-##        
-##        frame=self.frames[num]
-##        h=self.getHeigthFrame(frame)
-##        w=math.sqrt(((frame[8][1]-frame[4][1])**2)+((frame[8][0]-frame[4][0])**2)+((frame[8][2]-frame[4][2])**2))
-##        self.reescalarFrame(num,self.normh/h,self.normw/w)
-    def homologarEscala(self):        
-        for i in range(0,len(self.frames)):
-            self.homologarEscalaFrame(i)
-    def reescalarFrame(self,num,sch,scxy):
-        for i in range(0,len(self.frames[num])):
-            self.frames[num][i][0]*=scxy
-            self.framesc3d[num][i][0]*=scxy
-            self.frames[num][i][1]*=scxy
-            self.framesc3d[num][i][1]*=scxy
-            self.frames[num][i][2]*=sch
-            self.framesc3d[num][i][2]*=sch
-    def simplify(self):
-        toremove=[]
-        data=[]
-        for h in range(0,len(self.tomerge)):
-            for g in range(1,self.tomerge[h][1]+1):
-                toremove.append(self.tomerge[h][0]+g)
-        for frame in self.frames:
-            for i in range(0,len(frame)):
-                for h in range(0,len(self.tomerge)):
-                    if(i==self.tomerge[h][0]):
-                        for g in range(1,self.tomerge[h][1]+1):
-                            frame[i][0]+=frame[i+g][0]
-                            frame[i][1]+=frame[i+g][1]
-                            frame[i][2]+=frame[i+g][2]
-                        frame[i][0]/=self.tomerge[h][1]+1
-                        frame[i][1]/=self.tomerge[h][1]+1
-                        frame[i][2]/=self.tomerge[h][1]+1
-        for frame in self.frames:
-            newframe=[]
-            for j in range(0,len(frame)):
-                if (not(j in toremove)):
-                    newframe.append(frame[j])
-            data.append(newframe)
-        self.frames=data
-    def decompose(self):
-        for i in range(len(self.frames)):
-            self.decomposeFrame(i)
 def new_mainloop():
     global tasks
     while(True):
@@ -1249,7 +267,6 @@ class CustomCanvas(Canvas):
     def __init__(self,master, *args, **kwargs):
         Canvas.__init__(self,master,bd=2,background="gray",*args, **kwargs)
         self.back = PhotoImage(file="cuadros.gif")
-##        self.pin = PhotoImage(file="pin.gif")
         path = "pin.png"
         image = Image.open(path)
         image = image.resize((40,40), Image.ANTIALIAS)
@@ -1261,7 +278,10 @@ class CustomCanvas(Canvas):
         self.repaint(0)
     def repaint(self,evt):
         self.delete("all")
-        col=int(math.ceil(float(self.winfo_width())/self.widthback))
+        if self["scrollregion"]:
+            col=int(math.ceil(float(float(self["scrollregion"].split(" ")[2]))/self.widthback)) 
+        else:
+            col=int(math.ceil(float(self.winfo_width())/self.widthback))
         row=int(math.ceil(float(self.winfo_height())/self.heightback))
         for i in range(col):
             for j in range(row):
@@ -1314,12 +334,91 @@ class CustomFrame(Frame):
         
 class AnimationFrame(CustomFrame):
     canvas=0
+    h_off=40
+    pointer=0
+    timepos=0
+    hbar=0
+    botframe=0
+    maxText=0
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de animación")
         self.grid(column=0,row=0,columnspan=3,sticky=W+E)
         self.canvas=CustomCanvas(self)
-        self.canvas.pack(expand=1,fill=BOTH)
-
+        self.canvas.pack(fill=X)
+        self.spc=5.0/1000#segundos por cada pixel de canvas
+        self.maxTime=10.0#en segundos
+        
+        self.canvas.topaint.append(self.redraw)
+        self.canvas.bind("<Button-1>",self.clickedTime)
+        self.canvas.bind("<Motion>",self.moveTime)
+        self.botframe=Frame(self)
+        self.botframe.pack(side=BOTTOM,fill=X)
+        self.hbar=Scrollbar(self.botframe,orient=HORIZONTAL)
+        self.hbar.pack(side=LEFT,expand=1,fill=X)
+        self.hbar.config(command=self.canvas.xview)
+        self.canvas.config(xscrollcommand=self.hbar.set)
+        self.maxText = Text(self.botframe,height=1,width=6,font=self.customFont)
+        self.maxText.bind("<Return>", self.changeMax)
+        self.maxText.bind("<Button-1>", self.enableMax)
+        self.canvas.config(scrollregion=(0,0,self.maxTime/self.spc,0))
+        self.maxText.insert(INSERT,str(self.maxTime)+"s")
+        
+        self.maxText.pack(side=RIGHT)
+        self.timepos=0.0
+        self.pointer=0.0
+    def changeMax(self,evt):
+        s=self.maxText.get("%d.%d"%(1,0),END)
+        s=''.join(c for c in s if c.isdigit() or c=='.')
+        self.maxTime=float(s)
+        self.canvas.config(scrollregion=(0,0,self.maxTime/self.spc,0))
+        self.maxText.delete(1.0,END)
+        self.maxText.insert(INSERT,str(self.maxTime)+"s")
+        self.maxText.config(state = DISABLED)
+        self.canvas.repaint(0)
+        return 'break'
+    def enableMax(self,evt):
+        self.maxText.config(state = NORMAL)
+    def toSeconds(self,x):
+        i=self.hbar.get()[0]
+        recorrido=i*self.maxTime/self.spc
+        return (recorrido+x)*self.spc
+    def recalculateCanvas(self,x):
+        i=self.hbar.get()[0]
+        recorrido=i*self.maxTime/self.spc
+        return recorrido+x
+    def redraw(self):
+        self.drawTimeline()
+        self.drawAllTimeMarks()
+        self.drawPointer()
+        self.drawTimePos()
+    def drawTimePos(self):
+        x=self.recalculateCanvas(self.timepos)
+        self.canvas.create_line(x,0,x,self.canvas.winfo_height(),fill="black",width=2)
+        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw", text="{0:.1f}".format(self.toSeconds(self.timepos))+"s")            
+    def drawPointer(self):
+        x=self.recalculateCanvas(self.pointer)
+        self.canvas.create_line(x,0,x,self.canvas.winfo_height(),fill="gray",width=3)
+        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw",fill="gray40", text="{0:.1f}".format(self.toSeconds(self.pointer))+"s")            
+    def drawAllTimeMarks(self):
+        for i in range(int(self.maxTime)+1):
+            self.drawTimeMark(float(i))
+    def drawTimeMark(self,t):
+        x=t/self.spc
+        he=self.canvas.winfo_height()
+        self.canvas.create_line(x,he-self.h_off,x,he-self.h_off/2,fill="orange",width=3)
+        self.canvas.create_text(x,he-self.h_off/2,anchor="nw", text="{0:.1f}".format(t)+"s")        
+    def drawTimeline(self):
+        wid=self.maxTime/self.spc
+        he=self.canvas.winfo_height()
+        self.canvas.create_line(0,he-self.h_off,wid,he-self.h_off,fill = "yellow",width=6)
+        self.canvas.create_line(wid-20,he-self.h_off,wid,he-self.h_off,fill = "red",width=6)
+    def clickedTime(self,evt):
+        self.timepos=evt.x
+        self.canvas.repaint(0)
+    def moveTime(self,evt):
+        self.pointer=evt.x
+        self.canvas.repaint(0)
+        
 class controlPoint(object):
     rad=10
     locations=[]
@@ -1377,6 +476,18 @@ class controlPoint(object):
     def drawCP(self):
         p=self.draw.strokes[self.locations[0][0]][self.locations[0][1]]
         self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)
+class controlHead(controlPoint):
+    def getPosition(self):
+        return self.draw.head[int(len(self.draw.head)*0.75)]
+    def isSelected(self,x,y):
+        return Distance([x,y],self.getPosition())<=self.rad
+    def moveTo(self,x,y):
+        p=self.getPosition()
+        c=Centroid(self.draw.head)
+        self.draw.head=TranslateTo(self.draw.head,[x-(p[0]-c[0]),y-(p[1]-c[1])])
+    def drawCP(self):
+        p=self.getPosition()
+        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)
 class controlEyes(controlPoint):
     def getPosition(self):
         c=Centroid(self.draw.head)
@@ -1409,13 +520,19 @@ class DrawFrame(CustomFrame):
     controlPoints=0
     selectedCP=0
     proportions=0
+    lbar=0
+    tbar=0
+
+    newb=0
+    insertb=0
+    newgif=0
+    insertgif=0
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de dibujo")
         self.grid(column=0,row=1,sticky=W+E+N+S)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
         self.currentpoints=[]
-        self.body=[]
         self.strokes=[]
         self.head=getCircle(9*0.01,250)
         self.proportions=[0.58,0.67,0.67,0.89,0.89]
@@ -1426,7 +543,37 @@ class DrawFrame(CustomFrame):
         self.canvas.bind( "<Button-1>", clickedDraw )
         self.canvas.bind( "<ButtonRelease-1>", releaseDraw )
         self.canvas.bind( "<Button-3>", clicked3Draw )
+        
+        self.lbar=Frame(self.canvas)
+        self.tbar=Frame(self.lbar)
+        
+        self.newgif=PhotoImage(file="new.gif")
+        self.insertgif=PhotoImage(file="insert.gif")
+        self.newb = Button(self.tbar,command=self.newPose,image=self.newgif,width="20",height="20")
+        self.insertb = Button(self.tbar,command=self.insertPose,image=self.insertgif,width="20",height="20")
+        self.newb.pack(side=LEFT)
+        self.insertb.pack(side=LEFT)
+        
         self.config(cursor="pencil")
+        self.controlPoints=[controlHead(self)]
+    def insertPose(self):
+        print("inserta una pose")
+    def newPose(self):
+##        self.head=getCircle(9*0.01,250)
+        self.head=TranslateTo(self.head,[self.canvas.winfo_width()*0.5,self.canvas.winfo_height()*0.20])
+        self.lastsize=[float(self.canvas.winfo_width()),float(self.canvas.winfo_height())]
+        self.canvas.bind( "<B1-Motion>", paintDraw )
+        self.canvas.bind( "<Button-1>", clickedDraw )
+        self.canvas.bind( "<ButtonRelease-1>", releaseDraw )
+        self.canvas.bind( "<Button-3>", clicked3Draw )
+        self.currentpoints=[]
+        self.strokes=[]
+        self.config(cursor="pencil")
+        self.controlPoints=[controlHead(self)]
+        self.finished=False
+        self.canvas.repaint(0)
+        self.tbar.pack_forget()
+        self.lbar.pack_forget()
     def limitAll(self):
         for i in range(len(self.strokes)):
             for j in range(len(self.strokes[i])):
@@ -1494,9 +641,9 @@ class DrawFrame(CustomFrame):
         radOjos=diametro/10
         fullsep=diametro/3
         c=Centroid(self.head)
-        sep=fullsep*(1-abs(self.controlPoints[0].locations[0]))
-        x=c[0]+self.controlPoints[0].locations[0]*rad
-        y=c[1]+self.controlPoints[0].locations[1]*rad
+        sep=fullsep*(1-abs(self.controlPoints[1].locations[0]))
+        x=c[0]+self.controlPoints[1].locations[0]*rad
+        y=c[1]+self.controlPoints[1].locations[1]*rad
         r=radOjos
         self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline="black", width=3)
         self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline="black", width=3)
@@ -1585,10 +732,10 @@ class DrawFrame(CustomFrame):
         self.drawAllNormal(self.strokes,"black")
         self.drawPoints(self.head,"black")
         self.lastsize=[float(self.canvas.winfo_width()),float(self.canvas.winfo_height())]
+        for cp in self.controlPoints:
+                cp.drawCP()
         if self.finished:
             self.dibujarOjos()
-            for cp in self.controlPoints:
-                cp.drawCP()
     def isHuman(self):
         return len(self.strokes)==6
     def hechoAction(self):
@@ -1604,7 +751,7 @@ class DrawFrame(CustomFrame):
         self.config(cursor="arrow")
         self.ordenarBody()
         self.finished=True
-        self.controlPoints=[controlEyes(self,[0,0]),
+        self.controlPoints+=[controlEyes(self,[0,0]),
                             controlPoint(self,[[0,1],[1,0],[2,0]]),
                             controlPoint(self,[[0,4],[3,0],[4,0]]),
                             controlPoint(self,[[1,2]]),
@@ -1617,6 +764,10 @@ class DrawFrame(CustomFrame):
                             controlPoint(self,[[4,4]]),
                             controlPoint(self,[[0,2]])
                             ]
+        self.canvas.pack_propagate(False)
+        self.tbar.pack(side=LEFT)
+        self.lbar.pack(side=TOP,fill=X)
+        
     def estaDentroCabeza(self,p,c,rad):
         return Distance(p,c)<=rad
     def getCuello(self,points):
@@ -1758,7 +909,6 @@ def getTorso(body):
             mind=inc
             res=i
     return res
- 
 def PathLength(pts):
    d = 0
    primera=[]
@@ -1826,7 +976,6 @@ def distanceAtBestAngle(A,B):
             x2=(1-phi)*ta+phi*tb
             f2=distanceAtAngle(A,B,x2)
     return min(f1,f2)
-
 def ordenarStroke(stroke):
     if(stroke[0][1]>stroke[len(stroke)-1][1]):
         return stroke[:]
@@ -1841,6 +990,10 @@ def toStick(points):
     return BezierSpline(points,2,5)#3,4
 def paintDraw(event):
     global draw
+    if draw.selectedCP!=0:
+        draw.selectedCP.moveTo(event.x,event.y)
+        draw.canvas.repaint(0)
+        return
     drawLapiz(draw.canvas,draw.currentpoints[len(draw.currentpoints)-1])
     draw.currentpoints.append([event.x,event.y])
 def clickedDraw(event):
@@ -1848,6 +1001,10 @@ def clickedDraw(event):
     global primera
     primera=[]
     draw.currentpoints=[]
+    for cp in draw.controlPoints:
+            if(cp.isSelected(event.x,event.y)):
+                draw.selectedCP=cp
+                return
     draw.currentpoints.append([event.x,event.y])
 def offset(points,p):
     for i in range(len(points)):
@@ -1868,6 +1025,9 @@ def Centroid(pts):
    return [x,y]
 def releaseDraw(event):
     global draw
+    if draw.selectedCP!=0:
+        draw.selectedCP=0
+        return   
     draw.currentpoints.append([event.x,event.y])
     drawLapiz(draw.canvas,draw.currentpoints[len(draw.currentpoints)-1])
     draw.strokes.append(toStick(draw.completePoints(draw.currentpoints)))
@@ -1878,7 +1038,6 @@ def releaseDraw(event):
         draw.hechoAction()
     draw.limitAll()
     draw.canvas.repaint(0)
-    
 def clicked3Draw( event ):
     global draw
     if len(draw.strokes)>0:
@@ -2136,7 +1295,7 @@ def init():
     vistasSubMenu=Menu(toolbar,tearoff=False)
     master.configure(menu=menubar)
     wid=1000.0
-    h=600.0
+    h=700.0
     ws = master.winfo_screenwidth()
     hs = master.winfo_screenheight()
     x = (ws/2) - (wid/2) 
