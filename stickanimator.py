@@ -340,6 +340,11 @@ class AnimationFrame(CustomFrame):
     hbar=0
     botframe=0
     maxText=0
+    fps=30.0
+    stack=0
+    interpoled=0
+    render=0
+    rad=25
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de animación")
         self.grid(column=0,row=0,columnspan=3,sticky=W+E)
@@ -347,6 +352,10 @@ class AnimationFrame(CustomFrame):
         self.canvas.pack(fill=X)
         self.spc=5.0/1000#segundos por cada pixel de canvas
         self.maxTime=10.0#en segundos
+
+        self.stack=[]
+        self.interpoled=[]
+        self.render=[]
         
         self.canvas.topaint.append(self.redraw)
         self.canvas.bind("<Button-1>",self.clickedTime)
@@ -391,14 +400,16 @@ class AnimationFrame(CustomFrame):
         self.drawAllTimeMarks()
         self.drawPointer()
         self.drawTimePos()
+        for i in range(len(self.stack)):
+            self.dibujarPose(i,self.stack[i])
     def drawTimePos(self):
         x=self.recalculateCanvas(self.timepos)
         self.canvas.create_line(x,0,x,self.canvas.winfo_height(),fill="black",width=2)
-        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw", text="{0:.1f}".format(self.toSeconds(self.timepos))+"s")            
+        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw", text="{0:.2f}".format(self.toSeconds(self.timepos))+"s")            
     def drawPointer(self):
         x=self.recalculateCanvas(self.pointer)
         self.canvas.create_line(x,0,x,self.canvas.winfo_height(),fill="gray",width=3)
-        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw",fill="gray40", text="{0:.1f}".format(self.toSeconds(self.pointer))+"s")            
+        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw",fill="gray40", text="{0:.2f}".format(self.toSeconds(self.pointer))+"s")            
     def drawAllTimeMarks(self):
         for i in range(int(self.maxTime)+1):
             self.drawTimeMark(float(i))
@@ -406,18 +417,89 @@ class AnimationFrame(CustomFrame):
         x=t/self.spc
         he=self.canvas.winfo_height()
         self.canvas.create_line(x,he-self.h_off,x,he-self.h_off/2,fill="orange",width=3)
-        self.canvas.create_text(x,he-self.h_off/2,anchor="nw", text="{0:.1f}".format(t)+"s")        
+        self.canvas.create_text(x,he-self.h_off/2,anchor="nw", text="{0:.2f}".format(t)+"s")        
     def drawTimeline(self):
         wid=self.maxTime/self.spc
         he=self.canvas.winfo_height()
         self.canvas.create_line(0,he-self.h_off,wid,he-self.h_off,fill = "yellow",width=6)
         self.canvas.create_line(wid-20,he-self.h_off,wid,he-self.h_off,fill = "red",width=6)
+    def getStackPos(self,x):
+        return int(x/((1/self.fps)/self.spc))
+    def getStackCanvas(self,i):
+        return i*((1/self.fps)/self.spc)
     def clickedTime(self,evt):
-        self.timepos=evt.x
+        if(len(self.stack)==0):
+            return
+        i=self.getStackPos(evt.x)
+        self.timepos=i*(1.0/self.fps)/self.spc
+##        self.timepos=evt.x-(evt.x%((1/self.fps)/self.spc))
         self.canvas.repaint(0)
     def moveTime(self,evt):
-        self.pointer=evt.x
+        i=self.getStackPos(evt.x)
+##        self.pointer=evt.x-(evt.x%((1/self.fps)/self.spc))
+        self.pointer=i*(1.0/self.fps)/self.spc
         self.canvas.repaint(0)
+    def agregarPose(self,pose):
+        i=self.getStackPos(self.timepos)
+        act=len(self.stack)
+        if i>=act:
+            n=i-act
+            self.stack=self.stack+([[]]*n)
+            self.stack.append(self.scalePose(pose))
+        else:
+            self.stack[i]=self.scalePose(pose)
+    def scalePose(self,pose):
+        escalado=[]
+        escalado.append(pose[0])
+        for i in range(1,len(pose)):
+            escalado.append([])
+            for p in pose[i]:
+                escalado[-1].append([p[0]*self.rad,p[1]*self.rad])
+        return escalado
+    def dibujarPose(self,index,pose):
+        if len(pose)==0:
+            return
+        todraw=[]
+        ojos=pose[0]
+        for i in range(1,len(pose)):
+            todraw+=pose[i]
+        c=Centroid(todraw)
+##        [minX, minY, maxX - minX, maxY - minY]
+        p=[self.getStackCanvas(index),(self.canvas.winfo_height())/2]
+        todraw=TranslateTo(todraw,[p[0],p[1]])
+        head=getCircle(self.rad,250)
+        head=TranslateTo(head,todraw[0])
+        self.drawOjos(todraw[0],ojos[0])
+        separados=[]
+        stroke=[]
+        for i in range(1,len(todraw)):
+            stroke.append(todraw[i])
+            if(len(stroke)==5):
+                separados.append(stroke)
+                stroke=[]
+        self.drawAllNormal(separados,"black")
+        self.drawPoints(head,"black")
+    def drawAllNormal(self,All,color):
+        for a in All:
+            self.drawPoints(toSpline(a),color)
+    def drawPoints(self,todraw,color):
+        global primera 
+        primera=[]
+        for a in todraw:
+            drawPluma(self.canvas,a,color)
+    
+    def drawOjos(self,head,ojos):
+        diametro=self.rad*2
+        radOjos=diametro/10
+        fullsep=diametro/3
+        c=head
+        sep=fullsep*(1-abs(ojos[0]))
+        x=c[0]+ojos[0]*self.rad
+        y=c[1]+ojos[1]*self.rad
+        r=radOjos
+        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline="black", width=3)
+        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline="black", width=3)   
+    
         
 class controlPoint(object):
     rad=10
@@ -506,8 +588,7 @@ class controlEyes(controlPoint):
         self.locations[1]=(y-c[1])/rad
     def drawCP(self):
         p=self.getPosition()
-        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)
-        
+        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)  
 class DrawFrame(CustomFrame):
     canvas=0
     strokes=0
@@ -557,7 +638,10 @@ class DrawFrame(CustomFrame):
         self.config(cursor="pencil")
         self.controlPoints=[controlHead(self)]
     def insertPose(self):
-        print("inserta una pose")
+        global animator
+        p=self.standarPose()
+        animator.agregarPose(p)
+        animator.canvas.repaint(0)
     def newPose(self):
 ##        self.head=getCircle(9*0.01,250)
         self.head=TranslateTo(self.head,[self.canvas.winfo_width()*0.5,self.canvas.winfo_height()*0.20])
@@ -574,6 +658,39 @@ class DrawFrame(CustomFrame):
         self.canvas.repaint(0)
         self.tbar.pack_forget()
         self.lbar.pack_forget()
+    def standarPose(self):
+        diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
+        r=diametro/2
+        pose=self.getPose()
+        pose=self.unir(pose)
+        pose=TranslateTo(pose,[0,0])
+        for i in range(len(pose)):
+            pose[i][0]=pose[i][0]/r
+            pose[i][1]=pose[i][1]/r
+        return [np.array([self.controlPoints[1].locations])]+self.separar(pose)
+    def getPose(self):
+        pose=[]
+        pose.append(np.array([Centroid(self.head)]))
+##        pose.append(self.controlPoints[1].locations)
+        for s in self.strokes:
+            pose.append(s[:])
+        return pose
+    def unir(self,strokes):
+        unidos=[]
+        for s in strokes:
+            unidos+=list(s)
+        return unidos
+    def separar(self,pose):
+        separados=[]
+        separados.append([pose[0]])
+##        separados.append(pose[1])
+        stroke=[]
+        for i in range(1,len(pose)):
+            stroke.append(pose[i])
+            if(len(stroke)==5):
+                separados.append(stroke)
+                stroke=[]
+        return separados      
     def limitAll(self):
         for i in range(len(self.strokes)):
             for j in range(len(self.strokes[i])):
@@ -751,7 +868,7 @@ class DrawFrame(CustomFrame):
         self.config(cursor="arrow")
         self.ordenarBody()
         self.finished=True
-        self.controlPoints+=[controlEyes(self,[0,0]),
+        self.controlPoints+=[controlEyes(self,[0.0,0.0]),
                             controlPoint(self,[[0,1],[1,0],[2,0]]),
                             controlPoint(self,[[0,4],[3,0],[4,0]]),
                             controlPoint(self,[[1,2]]),
