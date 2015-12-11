@@ -373,17 +373,21 @@ class AnimationFrame(CustomFrame):
         self.maxText.insert(INSERT,str(self.maxTime)+"s")
         
         self.maxText.pack(side=RIGHT)
-        self.timepos=0.0
-        self.pointer=0.0
-    def changeMax(self,evt):
-        s=self.maxText.get("%d.%d"%(1,0),END)
-        s=''.join(c for c in s if c.isdigit() or c=='.')
-        self.maxTime=float(s)
+        self.timepos=0
+        self.pointer=0
+ 
+    def setMax(self,maxt):
+        self.maxTime=maxt
         self.canvas.config(scrollregion=(0,0,self.maxTime/self.spc,0))
         self.maxText.delete(1.0,END)
         self.maxText.insert(INSERT,str(self.maxTime)+"s")
         self.maxText.config(state = DISABLED)
         self.canvas.repaint(0)
+        
+    def changeMax(self,evt):
+        s=self.maxText.get("%d.%d"%(1,0),END)
+        s=''.join(c for c in s if c.isdigit() or c=='.')
+        self.setMax(float(s))
         return 'break'
     def enableMax(self,evt):
         self.maxText.config(state = NORMAL)
@@ -402,14 +406,62 @@ class AnimationFrame(CustomFrame):
         self.drawTimePos()
         for i in range(len(self.stack)):
             self.dibujarPose(i,self.stack[i])
+    def savePose(self,num):
+        archivo = open("pose"+str(num)+".txt", 'w')
+        for p in self.frames[num]:
+            archivo.write(str(p[0])+"/"+str(p[1])+"/"+str(p[2])+"@")
+        archivo.close()
+    def toString(self):
+        s=""
+        s+=str(self.maxTime)
+        s+="@"
+        for pose in self.stack:
+            s+=self.poseToString(pose)
+            s+="#"
+        s=s[:-1]
+        return s
+    def loadAnimation(self,string):
+        loaded=string.split("@")
+        maxt=float(loaded[0])
+        posesstring=loaded[1]
+        self.stack=[]
+        for s in posesstring.split("#"):
+            self.stack.append(self.stringToPose(s))
+        self.setMax(maxt)
+    def poseToString(self,pose):
+        string=""
+        for s in pose:
+            for p in s:
+                for v in p:
+                    string+=str(v)
+                    string+=":"
+                string=string[:-1]
+                string+=";"
+            string=string[:-1]    
+            string+=","
+        string=string[:-1]
+        return string
+    def stringToPose(self,string):
+        pose=[]
+        if len(string)==0:
+            return []
+        for stroke in string.split(","):
+            s=[]
+            for point in stroke.split(";"):
+                p=[]
+                for value in point.split(":"):
+                    p.append(float(value))
+                s.append(p)
+            pose.append(s)
+        return pose
     def drawTimePos(self):
-        x=self.recalculateCanvas(self.timepos)
+        x=self.getStackCanvas(self.timepos)
         self.canvas.create_line(x,0,x,self.canvas.winfo_height(),fill="black",width=2)
-        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw", text="{0:.2f}".format(self.toSeconds(self.timepos))+"s")            
+        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw", text="{0:.2f}".format(self.getStackSeconds(self.timepos))+"s")            
     def drawPointer(self):
-        x=self.recalculateCanvas(self.pointer)
+        x=self.getStackCanvas(self.pointer)
         self.canvas.create_line(x,0,x,self.canvas.winfo_height(),fill="gray",width=3)
-        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw",fill="gray40", text="{0:.2f}".format(self.toSeconds(self.pointer))+"s")            
+        self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw",fill="gray40", text="{0:.2f}".format(self.getStackSeconds(self.pointer))+"s")            
     def drawAllTimeMarks(self):
         for i in range(int(self.maxTime)+1):
             self.drawTimeMark(float(i))
@@ -427,20 +479,20 @@ class AnimationFrame(CustomFrame):
         return int(x/((1/self.fps)/self.spc))
     def getStackCanvas(self,i):
         return i*((1/self.fps)/self.spc)
+    def getStackSeconds(self,i):
+        return float(i)/self.fps
     def clickedTime(self,evt):
         if(len(self.stack)==0):
             return
-        i=self.getStackPos(evt.x)
-        self.timepos=i*(1.0/self.fps)/self.spc
-##        self.timepos=evt.x-(evt.x%((1/self.fps)/self.spc))
+        i=self.getStackPos(self.recalculateCanvas(evt.x))
+        self.timepos=i
         self.canvas.repaint(0)
     def moveTime(self,evt):
-        i=self.getStackPos(evt.x)
-##        self.pointer=evt.x-(evt.x%((1/self.fps)/self.spc))
-        self.pointer=i*(1.0/self.fps)/self.spc
+        i=self.getStackPos(self.recalculateCanvas(evt.x))
+        self.pointer=i
         self.canvas.repaint(0)
     def agregarPose(self,pose):
-        i=self.getStackPos(self.timepos)
+        i=self.timepos
         act=len(self.stack)
         if i>=act:
             n=i-act
@@ -1362,6 +1414,26 @@ def drawEmptyOval(pt,rad,color):
     vision.canvas.create_oval(pt[0]-rad,pt[1]-rad,pt[0]+rad,pt[1]+rad,outline=color,width=3)
 def drawOvals(pt,color):
     vision.canvas.create_oval(pt[0]-5,pt[1]-5,pt[0]+5,pt[1]+5,fill=color)
+def saveCallBack():
+    global master
+    filename = asksaveasfilename(parent=master)
+    if filename=='':
+        return
+    filename = open(filename, 'w')
+    global animator
+    s=animator.toString()
+    filename.write(s)
+    filename.close()
+def loadCallBack():
+    global master
+    filename = askopenfilename(parent=master)
+    if filename=='':
+        return
+    filename = open(filename, 'r')
+    string=filename.read()
+    global animator
+    animator.loadAnimation(string)
+    filename.close()
 def init():
     global customframes
     customframes=[]
@@ -1381,9 +1453,9 @@ def init():
     recentMenu = Menu(toolbar,tearoff=False)
      
     menubar.add_cascade(label="Archivo", menu=fileMenu)
-    fileMenu.add_command(label="Abrir")#, command=openCallBack)
-    fileMenu.add_cascade(label="Abrir reciente", menu=recentMenu)
-    
+    fileMenu.add_command(label="Abrir", command=loadCallBack)
+    fileMenu.add_command(label="Guardar", command=saveCallBack)
+##    fileMenu.add_cascade(label="Abrir reciente", menu=recentMenu)
     fileMenu.add_command(label="Salir")
     
     animator=AnimationFrame(master)
