@@ -1,7 +1,6 @@
-﻿import platform, sys,math
+﻿import sys,math
 from numpy import fft,arange, sin, pi
 from scipy import signal as sign
-from scipy import ndimage as ndi
 import numpy as np 
 import time
 from Tkinter import *
@@ -9,23 +8,11 @@ import ntpath
 import tkMessageBox
 import tkFont
 from PIL import Image, ImageDraw, ImageTk
-import os
 import scipy.interpolate as si
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2TkAgg
-import threading
-import thread
-import ttk
-import csv
 import signal
-from cStringIO import StringIO
-from struct import unpack
 from tkFileDialog import askopenfilename, asksaveasfilename
 import cv2
-import gc
 
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
 class CsvNormalizer(object):
     corners=[]#[i,j] where we change previous node of i so it becomes j
     #first element doesnt have previous so its fine whatever value of angle it has
@@ -345,6 +332,7 @@ class AnimationFrame(CustomFrame):
     interpoled=0
     render=0
     rad=25
+    poseS=-1
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de animación")
         self.grid(column=0,row=0,columnspan=3,sticky=W+E)
@@ -360,6 +348,10 @@ class AnimationFrame(CustomFrame):
         self.canvas.topaint.append(self.redraw)
         self.canvas.bind("<Button-1>",self.clickedTime)
         self.canvas.bind("<Motion>",self.moveTime)
+        self.canvas.bind("<ButtonRelease-1>",self.releaseTime)
+        self.canvas.bind("<Double-Button-1>",self.doubleTime)
+##        self.canvas.bind("<1>", lambda event: )
+        self.canvas.bind("<Delete>",self.deletePose)
         self.botframe=Frame(self)
         self.botframe.pack(side=BOTTOM,fill=X)
         self.hbar=Scrollbar(self.botframe,orient=HORIZONTAL)
@@ -402,10 +394,17 @@ class AnimationFrame(CustomFrame):
     def redraw(self):
         self.drawTimeline()
         self.drawAllTimeMarks()
+        for i in range(len(self.stack)):
+            if i==self.pointer:
+                self.dibujarPose(i,self.stack[i],"blue")
+            else:
+                self.dibujarPose(i,self.stack[i])
+        if self.poseS!=-1:
+            self.dibujarPose(self.pointer,self.stack[self.poseS],"red")
+##        self.pointer
+##        self.poseS
         self.drawPointer()
         self.drawTimePos()
-        for i in range(len(self.stack)):
-            self.dibujarPose(i,self.stack[i])
     def savePose(self,num):
         archivo = open("pose"+str(num)+".txt", 'w')
         for p in self.frames[num]:
@@ -482,14 +481,41 @@ class AnimationFrame(CustomFrame):
     def getStackSeconds(self,i):
         return float(i)/self.fps
     def clickedTime(self,evt):
+        self.poseS=-1
+        self.canvas.focus_set()
         if(len(self.stack)==0):
             return
         i=self.getStackPos(self.recalculateCanvas(evt.x))
         self.timepos=i
+        if(i<len(self.stack) and i!=0):
+            self.poseS=i
         self.canvas.repaint(0)
+    def doubleTime(self,evt):
+        i=self.getStackPos(self.recalculateCanvas(evt.x))
+        if i!=0 and i<len(self.stack) and len(self.stack[i])!=0:
+            print("modificandose")            
     def moveTime(self,evt):
         i=self.getStackPos(self.recalculateCanvas(evt.x))
         self.pointer=i
+        self.canvas.repaint(0)
+    def releaseTime(self,evt):
+        if self.poseS==-1:
+            return
+        if self.pointer>=len(self.stack):
+            n=self.pointer-len(self.stack)
+            self.stack=self.stack+([[]]*n)
+            self.stack.append(self.stack[self.poseS])
+            self.stack[self.poseS]=[]
+        else:
+            temp=self.stack[self.poseS][:]
+            self.stack[self.poseS]=self.stack[self.pointer]
+            self.stack[self.pointer]=temp
+        self.poseS=-1
+        self.canvas.repaint(0)
+    def deletePose(self,evt):
+        if(self.timepos!=0 and self.timepos<len(self.stack)):
+            if(tkMessageBox.askyesno("Eliminar pose","Seguro que quieres eliminar esta pose?")):
+                self.stack[self.timepos]=[]
         self.canvas.repaint(0)
     def agregarPose(self,pose):
         i=self.timepos
@@ -508,7 +534,7 @@ class AnimationFrame(CustomFrame):
             for p in pose[i]:
                 escalado[-1].append([p[0]*self.rad,p[1]*self.rad])
         return escalado
-    def dibujarPose(self,index,pose):
+    def dibujarPose(self,index,pose,color="black"):
         if len(pose)==0:
             return
         todraw=[]
@@ -521,7 +547,7 @@ class AnimationFrame(CustomFrame):
         todraw=TranslateTo(todraw,[p[0],p[1]])
         head=getCircle(self.rad,250)
         head=TranslateTo(head,todraw[0])
-        self.drawOjos(todraw[0],ojos[0])
+        self.drawOjos(todraw[0],ojos[0],color)
         separados=[]
         stroke=[]
         for i in range(1,len(todraw)):
@@ -529,8 +555,8 @@ class AnimationFrame(CustomFrame):
             if(len(stroke)==5):
                 separados.append(stroke)
                 stroke=[]
-        self.drawAllNormal(separados,"black")
-        self.drawPoints(head,"black")
+        self.drawAllNormal(separados,color)
+        self.drawPoints(head,color)
     def drawAllNormal(self,All,color):
         for a in All:
             self.drawPoints(toSpline(a),color)
@@ -540,7 +566,7 @@ class AnimationFrame(CustomFrame):
         for a in todraw:
             drawPluma(self.canvas,a,color)
     
-    def drawOjos(self,head,ojos):
+    def drawOjos(self,head,ojos,color):
         diametro=self.rad*2
         radOjos=diametro/10
         fullsep=diametro/3
@@ -549,8 +575,8 @@ class AnimationFrame(CustomFrame):
         x=c[0]+ojos[0]*self.rad
         y=c[1]+ojos[1]*self.rad
         r=radOjos
-        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline="black", width=3)
-        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline="black", width=3)   
+        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline=color, width=3)
+        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline=color, width=3)   
     
         
 class controlPoint(object):
