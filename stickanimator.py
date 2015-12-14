@@ -333,6 +333,7 @@ class AnimationFrame(CustomFrame):
     render=0
     rad=25
     poseS=-1
+    poseE=-1
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de animación")
         self.grid(column=0,row=0,columnspan=3,sticky=W+E)
@@ -493,7 +494,9 @@ class AnimationFrame(CustomFrame):
     def doubleTime(self,evt):
         i=self.getStackPos(self.recalculateCanvas(evt.x))
         if i!=0 and i<len(self.stack) and len(self.stack[i])!=0:
-            print("modificandose")            
+            global draw
+            draw.initEditPose(i)
+            self.poseE=i
     def moveTime(self,evt):
         i=self.getStackPos(self.recalculateCanvas(evt.x))
         self.pointer=i
@@ -501,6 +504,8 @@ class AnimationFrame(CustomFrame):
     def releaseTime(self,evt):
         if self.poseS==-1:
             return
+        if self.poseS==self.poseE:
+            self.poseE=self.pointer
         if self.pointer>=len(self.stack):
             n=self.pointer-len(self.stack)
             self.stack=self.stack+([[]]*n)
@@ -526,6 +531,12 @@ class AnimationFrame(CustomFrame):
             self.stack.append(self.scalePose(pose))
         else:
             self.stack[i]=self.scalePose(pose)
+        self.canvas.repaint(0)
+    def refreshPose(self,pose):
+        self.stack[self.poseE]=self.scalePose(pose)
+        self.canvas.repaint(0)
+    def endEditPose(self):
+        self.poseE=-1
     def scalePose(self,pose):
         escalado=[]
         escalado.append(pose[0])
@@ -681,11 +692,14 @@ class DrawFrame(CustomFrame):
     proportions=0
     lbar=0
     tbar=0
+    ant=[]
 
     newb=0
     insertb=0
+    doneb=0
     newgif=0
     insertgif=0
+    donegif=0
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de dibujo")
         self.grid(column=0,row=1,sticky=W+E+N+S)
@@ -708,18 +722,74 @@ class DrawFrame(CustomFrame):
         
         self.newgif=PhotoImage(file="new.gif")
         self.insertgif=PhotoImage(file="insert.gif")
+        self.donegif=PhotoImage(file="done.gif")
         self.newb = Button(self.tbar,command=self.newPose,image=self.newgif,width="20",height="20")
         self.insertb = Button(self.tbar,command=self.insertPose,image=self.insertgif,width="20",height="20")
+        self.doneb = Button(self.tbar,command=self.donePose,image=self.donegif,width="20",height="20")
+        
         self.newb.pack(side=LEFT)
         self.insertb.pack(side=LEFT)
         
         self.config(cursor="pencil")
         self.controlPoints=[controlHead(self)]
+    def centrarTodo(self):
+        minp=[9999999,999999]
+        maxp=[0,0]
+        for p in self.head:
+            minp[0]=min(p[0],minp[0])
+            minp[1]=min(p[1],minp[1])
+            maxp[0]=max(p[0],maxp[0])
+            maxp[1]=max(p[1],maxp[1])
+        for s in self.strokes:
+            for p in s:
+                minp[0]=min(p[0],minp[0])
+                minp[1]=min(p[1],minp[1])
+                maxp[0]=max(p[0],maxp[0])
+                maxp[1]=max(p[1],maxp[1])
+        cm=[self.canvas.winfo_width()/2,self.canvas.winfo_height()/2]
+        pm=[(minp[0]+maxp[0])/2,(minp[1]+maxp[1])/2]
+        c=Centroid(self.head)
+        offset=[c[0]-pm[0],c[1]-pm[1]]
+        newp=[cm[0]+offset[0],cm[1]+offset[1]]
+        self.head=TranslateTo(self.head,newp)
+        for i in range(len(self.strokes)):
+            c=Centroid(self.strokes[i])
+            offset=[c[0]-pm[0],c[1]-pm[1]]
+            newp=[cm[0]+offset[0],cm[1]+offset[1]]
+            self.strokes[i]=TranslateTo(self.strokes[i],newp)
+            
+            
+    def initEditPose(self,i):
+        self.ant=[self.head[:],self.strokes[:],self.lastsize[:]]
+        global animator
+
+        ojos=animator.stack[i][0][0]
+        headp=animator.stack[i][1][0]
+
+        diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
+        r=diametro/2
+        
+        self.head=TranslateTo(self.head,headp)
+        self.strokes=animator.stack[i][2:][:]
+        self.centrarTodo()
+        self.hechoAction()
+        self.controlPoints[1].locations[0]=ojos[0]
+        self.controlPoints[1].locations[1]=ojos[1]
+        self.canvas.repaint(0)
+    def donePose(self):
+        self.newPose()
+        self.head=self.ant[0][:]
+        self.strokes=self.ant[1][:]
+        self.lastsize=self.ant[2][:]
+        self.ant=[]
+        global animator
+        animator.endEditPose()
+        if len(self.strokes==5):
+            self.hechoAction()
     def insertPose(self):
         global animator
         p=self.standarPose()
         animator.agregarPose(p)
-        animator.canvas.repaint(0)
     def newPose(self):
 ##        self.head=getCircle(9*0.01,250)
         self.head=TranslateTo(self.head,[self.canvas.winfo_width()*0.5,self.canvas.winfo_height()*0.20])
@@ -962,6 +1032,9 @@ class DrawFrame(CustomFrame):
         self.canvas.pack_propagate(False)
         self.tbar.pack(side=LEFT)
         self.lbar.pack(side=TOP,fill=X)
+        self.doneb.pack_forget()
+        if len(self.ant)!=0:
+            self.doneb.pack(side=LEFT)
         
     def estaDentroCabeza(self,p,c,rad):
         return Distance(p,c)<=rad
@@ -984,20 +1057,6 @@ class DrawFrame(CustomFrame):
             newpoints = newpoints[1:]
         newpoints.insert(0,self.getCuello(newpoints))
         return newpoints
-    def editAction(self):
-        self.bottomButton.config(text="Hecho!",command=self.hechoAction)
-        self.config(relief=RIDGE)
-        self.canvas.bind( "<B1-Motion>", paintDraw )
-        self.canvas.bind( "<Button-1>", clickedDraw )
-        self.canvas.bind( "<ButtonRelease-1>", releaseDraw )
-        self.canvas.bind( "<Button-3>", clicked3Draw )
-        self.config(cursor="pencil")
-        self.bottomButton.config(state = NORMAL)
-        self.buttonframe.pack_forget()
-        self.splined=[]
-        self.stickfigure=[]
-        self.canvas.delete("all")
-        self.drawAllNormal(self.strokes,"blue")
     def drawAllNormal(self,All,color):
         for a in All:
             self.drawPoints(toSpline(a),color)
@@ -1010,6 +1069,10 @@ class DrawFrame(CustomFrame):
         if self.selectedCP==0:
             return
         self.selectedCP.moveTo(evt.x,evt.y)
+        if(len(self.ant)!=0):
+            global animator
+            p=self.standarPose()
+            animator.refreshPose(p)
         self.canvas.repaint(0)
     def selectRelease(self,evt):
         self.selectedCP=0    
