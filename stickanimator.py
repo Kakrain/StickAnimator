@@ -334,6 +334,10 @@ class AnimationFrame(CustomFrame):
     rad=25
     poseS=-1
     poseE=-1
+    clipboard=[]
+    redolist=[]
+    undolist=[]
+    maxdolist=10
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de animación")
         self.grid(column=0,row=0,columnspan=3,sticky=W+E)
@@ -351,7 +355,11 @@ class AnimationFrame(CustomFrame):
         self.canvas.bind("<Motion>",self.moveTime)
         self.canvas.bind("<ButtonRelease-1>",self.releaseTime)
         self.canvas.bind("<Double-Button-1>",self.doubleTime)
-##        self.canvas.bind("<1>", lambda event: )
+        self.canvas.bind('<Control-c>', self.copiar)
+        self.canvas.bind('<Control-x>', self.cortar)
+        self.canvas.bind('<Control-v>', self.pegar)
+        self.canvas.bind('<Control-z>', self.deshacer)
+        self.canvas.bind('<Control-r>', self.rehacer)
         self.canvas.bind("<Delete>",self.deletePose)
         self.botframe=Frame(self)
         self.botframe.pack(side=BOTTOM,fill=X)
@@ -368,7 +376,103 @@ class AnimationFrame(CustomFrame):
         self.maxText.pack(side=RIGHT)
         self.timepos=0
         self.pointer=0
- 
+    def deshacer(self,evt=None):
+        if(len(self.undolist)!=0):
+            self.redolist.append(self.stack[:])
+            if(len(self.redolist)>self.maxdolist):
+                self.redolist=self.redolist[1:]
+            self.stack=self.undolist.pop()
+        self.interpolateStack()
+    def rehacer(self,evt=None):
+        if(len(self.redolist)!=0):
+            self.undolist.append(self.stack[:])
+            if(len(self.undolist)>self.maxdolist):
+                self.undolist=self.undolist[1:]
+            self.stack=self.redolist.pop()
+        self.interpolateStack()
+    def do(self):
+        self.redolist=[]
+        self.undolist.append(self.stack[:])
+        if(len(self.undolist)>self.maxdolist):
+            self.undolist=self.undolist[1:]
+        
+    def copiar(self, evt=None):
+        self.clipboard=self.interpoled[self.pointer][:]
+    def cortar(self, evt):
+        self.clipboard=self.interpoled[self.pointer][:]
+        self.stack[self.pointer]=[]
+        self.interpolateStack()
+        self.do()
+    def pegar(self, evt):
+        self.stack[self.pointer]=self.clipboard[:]
+        self.interpolateStack()
+        self.do()
+    def unirPose(self,pose):
+        newpose=[]
+        for s in pose:
+            for p in s:
+                newpose.append(p)
+        return newpose
+    def separarPose(self,pose):
+        newpose=[]
+        newpose.append([pose[0]])
+        newpose.append([pose[1]])
+        stroke=[]
+        for i in range(2,len(pose)):
+            stroke.append(pose[i])
+            if(len(stroke)==5):
+                newpose.append(stroke)
+                stroke=[]
+        return newpose
+    def vectorizePose(self,pose):
+        newpose=[]
+        for p in pose:
+            for v in p:
+                newpose.append(v)
+        return newpose
+    def unvectorizePose(self,pose):
+        newpose=[]
+        point=[]
+        for v in pose:
+            point.append(v)
+            if(len(point)==2):
+                newpose.append(point)
+                point=[]
+        return newpose
+    def fitStack(self):
+        n=0
+        for i in range(1,len(self.stack)):
+           if(len(self.stack[-i])==0):
+               n+=1
+           else:
+               break
+        if(n==0):
+            return
+        self.stack=self.stack[:-n]
+    def getInterpolation(self,init=0):
+        if(init==-1 or init==len(self.stack)-1):
+            return []
+        last=-1
+        for i in range(init+1,len(self.stack)):
+            if(len(self.stack[i])!=0):
+                last=i
+                break
+        n=last-init+1
+        v1=self.vectorizePose(self.unirPose(self.stack[init]))
+        v2=self.vectorizePose(self.unirPose(self.stack[last]))
+        inter=[np.linspace(i,j,n) for i,j in zip(v1,v2)]
+        inter=np.array(inter).T
+        if init!=0:
+            inter=inter[1:]
+        return list(inter)+self.getInterpolation(last)
+    def interpolateStack(self):
+        interp=self.getInterpolation()
+        self.interpoled=[]
+        for v in interp:
+            self.interpoled.append(self.separarPose(self.unvectorizePose(v)))
+        self.canvas.repaint(0)
+    def curveStack(stack):
+        pass
     def setMax(self,maxt):
         self.maxTime=maxt
         self.canvas.config(scrollregion=(0,0,self.maxTime/self.spc,0))
@@ -392,18 +496,23 @@ class AnimationFrame(CustomFrame):
         i=self.hbar.get()[0]
         recorrido=i*self.maxTime/self.spc
         return recorrido+x
-    def redraw(self):
-        self.drawTimeline()
-        self.drawAllTimeMarks()
+    def drawStack(self):
         for i in range(len(self.stack)):
             if i==self.pointer:
                 self.dibujarPose(i,self.stack[i],"blue")
             else:
                 self.dibujarPose(i,self.stack[i])
+    def drawInterpoled(self):
+        i=self.pointer
+        if i>=0 and i<len(self.interpoled):
+            self.dibujarPose(i,self.interpoled[i],"gray70")
+    def redraw(self):
+        self.drawTimeline()
+        self.drawAllTimeMarks()
+        self.drawInterpoled()
+        self.drawStack()
         if self.poseS!=-1:
             self.dibujarPose(self.pointer,self.stack[self.poseS],"red")
-##        self.pointer
-##        self.poseS
         self.drawPointer()
         self.drawTimePos()
     def savePose(self,num):
@@ -428,6 +537,7 @@ class AnimationFrame(CustomFrame):
         for s in posesstring.split("#"):
             self.stack.append(self.stringToPose(s))
         self.setMax(maxt)
+        self.interpolateStack()
     def poseToString(self,pose):
         string=""
         for s in pose:
@@ -515,13 +625,17 @@ class AnimationFrame(CustomFrame):
             temp=self.stack[self.poseS][:]
             self.stack[self.poseS]=self.stack[self.pointer]
             self.stack[self.pointer]=temp
+            self.fitStack()
+        
         self.poseS=-1
-        self.canvas.repaint(0)
+        self.do()
+        self.interpolateStack()
     def deletePose(self,evt):
-        if(self.timepos!=0 and self.timepos<len(self.stack)):
+        if(self.timepos!=0 and self.timepos<len(self.stack) and len(self.stack[self.timepos])!=0):
             if(tkMessageBox.askyesno("Eliminar pose","Seguro que quieres eliminar esta pose?")):
                 self.stack[self.timepos]=[]
-        self.canvas.repaint(0)
+        self.do()
+        self.interpolateStack()
     def agregarPose(self,pose):
         i=self.timepos
         act=len(self.stack)
@@ -531,9 +645,11 @@ class AnimationFrame(CustomFrame):
             self.stack.append(self.scalePose(pose))
         else:
             self.stack[i]=self.scalePose(pose)
-        self.canvas.repaint(0)
+        self.do()
+        self.interpolateStack()
     def refreshPose(self,pose):
         self.stack[self.poseE]=self.scalePose(pose)
+        self.interpolateStack()
         self.canvas.repaint(0)
     def endEditPose(self):
         self.poseE=-1
@@ -784,7 +900,8 @@ class DrawFrame(CustomFrame):
         self.ant=[]
         global animator
         animator.endEditPose()
-        if len(self.strokes==5):
+        self.canvas.config(highlightbackground="SystemButtonFace")
+        if len(self.strokes)==5:
             self.hechoAction()
     def insertPose(self):
         global animator
@@ -1035,6 +1152,7 @@ class DrawFrame(CustomFrame):
         self.doneb.pack_forget()
         if len(self.ant)!=0:
             self.doneb.pack(side=LEFT)
+            self.canvas.config(highlightbackground="red")
         
     def estaDentroCabeza(self,p,c,rad):
         return Distance(p,c)<=rad
