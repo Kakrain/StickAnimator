@@ -330,7 +330,7 @@ class AnimationFrame(CustomFrame):
     fps=30.0
     stack=0
     interpoled=0
-    render=0
+    rendered=0
     rad=25
     poseS=-1
     poseE=-1
@@ -348,7 +348,7 @@ class AnimationFrame(CustomFrame):
 
         self.stack=[]
         self.interpoled=[]
-        self.render=[]
+        self.rendered=[]
         
         self.canvas.topaint.append(self.redraw)
         self.canvas.bind("<Button-1>",self.clickedTime)
@@ -366,7 +366,7 @@ class AnimationFrame(CustomFrame):
         self.hbar=Scrollbar(self.botframe,orient=HORIZONTAL)
         self.hbar.pack(side=LEFT,expand=1,fill=X)
         self.hbar.config(command=self.canvas.xview)
-        self.canvas.config(xscrollcommand=self.hbar.set)
+        self.canvas.config(xscrollcommand=self.scrollbarset)
         self.maxText = Text(self.botframe,height=1,width=6,font=self.customFont)
         self.maxText.bind("<Return>", self.changeMax)
         self.maxText.bind("<Button-1>", self.enableMax)
@@ -376,6 +376,9 @@ class AnimationFrame(CustomFrame):
         self.maxText.pack(side=RIGHT)
         self.timepos=0
         self.pointer=0
+    def scrollbarset(self,lo,hi):
+        self.hbar.set(lo,hi)
+        self.canvas.repaint(0)
     def deshacer(self,evt=None):
         if(len(self.undolist)!=0):
             self.redolist.append(self.stack[:])
@@ -404,6 +407,11 @@ class AnimationFrame(CustomFrame):
         self.interpolateStack()
         self.do()
     def pegar(self, evt):
+        i=self.pointer
+        act=len(self.stack)
+        if i>=act:
+            n=i-act+1
+            self.stack=self.stack+([[]]*n)
         self.stack[self.pointer]=self.clipboard[:]
         self.interpolateStack()
         self.do()
@@ -471,10 +479,17 @@ class AnimationFrame(CustomFrame):
         for v in interp:
             self.interpoled.append(self.separarPose(self.unvectorizePose(v)))
         self.canvas.repaint(0)
+##        self.renderStack()
+    def renderStack(self):
+        self.rendered=[]
+        for i in range(len(self.interpoled)):
+            self.rendered.append(self.renderPose(i,self.interpoled[i]))
+        self.canvas.repaint(0)
     def curveStack(stack):
         pass
     def setMax(self,maxt):
-        self.maxTime=maxt
+        maxtimestack=len(self.stack)/self.fps
+        self.maxTime=max(maxt,maxtimestack)
         self.canvas.config(scrollregion=(0,0,self.maxTime/self.spc,0))
         self.maxText.delete(1.0,END)
         self.maxText.insert(INSERT,str(self.maxTime)+"s")
@@ -497,7 +512,13 @@ class AnimationFrame(CustomFrame):
         recorrido=i*self.maxTime/self.spc
         return recorrido+x
     def drawStack(self):
-        for i in range(len(self.stack)):
+        ind=self.hbar.get()[0]
+        recorrido=ind*self.maxTime/self.spc
+        t=recorrido*self.spc
+        tf=t+(self.canvas.winfo_width()*self.spc)
+        f0=min(len(self.interpoled),int(t*self.fps))
+        ff=min(len(self.interpoled),int(tf*self.fps))
+        for i in range(f0,ff):
             if i==self.pointer:
                 self.dibujarPose(i,self.stack[i],"blue")
             else:
@@ -573,7 +594,11 @@ class AnimationFrame(CustomFrame):
         self.canvas.create_line(x,0,x,self.canvas.winfo_height(),fill="gray",width=3)
         self.canvas.create_text(x,self.canvas.winfo_height()-20,anchor="nw",fill="gray40", text="{0:.2f}".format(self.getStackSeconds(self.pointer))+"s")            
     def drawAllTimeMarks(self):
-        for i in range(int(self.maxTime)+1):
+        ind=self.hbar.get()[0]
+        recorrido=ind*self.maxTime/self.spc
+        t=recorrido*self.spc
+        tf=t+(self.canvas.winfo_width()*self.spc)
+        for i in range(int(t),int(tf)+1):
             self.drawTimeMark(float(i))
     def drawTimeMark(self,t):
         x=t/self.spc
@@ -583,8 +608,12 @@ class AnimationFrame(CustomFrame):
     def drawTimeline(self):
         wid=self.maxTime/self.spc
         he=self.canvas.winfo_height()
-        self.canvas.create_line(0,he-self.h_off,wid,he-self.h_off,fill = "yellow",width=6)
+        i=self.hbar.get()[0]
+        recorrido=i*self.maxTime/self.spc
+        self.canvas.create_line(recorrido,he-self.h_off,recorrido+self.canvas.winfo_width(),he-self.h_off,fill = "yellow",width=6)
         self.canvas.create_line(wid-20,he-self.h_off,wid,he-self.h_off,fill = "red",width=6)
+##        self.canvas.create_line(0,he-self.h_off,wid,he-self.h_off,fill = "yellow",width=6)
+##        self.canvas.create_line(wid-20,he-self.h_off,wid,he-self.h_off,fill = "red",width=6)
     def getStackPos(self,x):
         return int(x/((1/self.fps)/self.spc))
     def getStackCanvas(self,i):
@@ -649,9 +678,10 @@ class AnimationFrame(CustomFrame):
         self.interpolateStack()
     def refreshPose(self,pose):
         self.stack[self.poseE]=self.scalePose(pose)
-        self.interpolateStack()
+##        self.interpolateStack()
         self.canvas.repaint(0)
     def endEditPose(self):
+        self.interpolateStack()
         self.poseE=-1
     def scalePose(self,pose):
         escalado=[]
@@ -661,20 +691,17 @@ class AnimationFrame(CustomFrame):
             for p in pose[i]:
                 escalado[-1].append([p[0]*self.rad,p[1]*self.rad])
         return escalado
-    def dibujarPose(self,index,pose,color="black"):
-        if len(pose)==0:
-            return
+    def renderPose(self,index,pose,num=8):
         todraw=[]
         ojos=pose[0]
         for i in range(1,len(pose)):
             todraw+=pose[i]
         c=Centroid(todraw)
-##        [minX, minY, maxX - minX, maxY - minY]
         p=[self.getStackCanvas(index),(self.canvas.winfo_height())/2]
         todraw=TranslateTo(todraw,[p[0],p[1]])
-        head=getCircle(self.rad,250)
+        head=getCircle(self.rad,num)
         head=TranslateTo(head,todraw[0])
-        self.drawOjos(todraw[0],ojos[0],color)
+        eyes=self.renderOjos(todraw[0],ojos[0])
         separados=[]
         stroke=[]
         for i in range(1,len(todraw)):
@@ -682,20 +709,62 @@ class AnimationFrame(CustomFrame):
             if(len(stroke)==5):
                 separados.append(stroke)
                 stroke=[]
-        self.drawAllNormal(separados,color)
+        res=[]
+        res+=[eyes]
+        for s in separados:
+            res+=toSpline(s,num)
+        res=list(res)+list(head)
+        return res
+    def drawPose(self,pose,color="black"):
+        ojos=pose[0][:]
+        self.drawOjos(ojos,color)
+        todraw=pose[1:]
+        num=len(todraw)/6
+        for i in range(0,len(todraw),num):
+            self.drawPoints(todraw[i:i+num],color)
+    def dibujarPose(self,index,pose,color="black",num=9):
+        if len(pose)==0:
+            return
+        todraw=[]
+        ojos=pose[0]
+        for i in range(1,len(pose)):
+            todraw+=pose[i]
+        c=Centroid(todraw)
+        p=[self.getStackCanvas(index),(self.canvas.winfo_height())/2]
+        todraw=TranslateTo(todraw,[p[0],p[1]])
+        head=getCircle(self.rad,num)
+        head=TranslateTo(head,todraw[0])
+        self.dibujarOjos(todraw[0],ojos[0],color)
+        separados=[]
+        stroke=[]
+        for i in range(1,len(todraw)):
+            stroke.append(todraw[i])
+            if(len(stroke)==5):
+                separados.append(stroke)
+                stroke=[]
+        self.drawAllNormal(separados,color,num)
         self.drawPoints(head,color)
-    def drawAllNormal(self,All,color):
+    def drawAllNormal(self,All,color,num=20):
         for a in All:
-            self.drawPoints(toSpline(a),color)
+            self.drawPoints(toSpline(a,num),color)
     def drawPoints(self,todraw,color):
         global primera 
         primera=[]
         for a in todraw:
             drawPluma(self.canvas,a,color)
-    
-    def drawOjos(self,head,ojos,color):
+    def renderOjos(self,head,ojos):
+        c=head
+        x=c[0]+ojos[0]*self.rad
+        y=c[1]+ojos[1]*self.rad
         diametro=self.rad*2
-        radOjos=diametro/10
+        radOjos=diametro/12
+        fullsep=diametro/3 
+        sep=fullsep*(1-abs(ojos[0]))
+        r=radOjos
+        return [x,y,sep,r]
+    def dibujarOjos(self,head,ojos,color):
+        diametro=self.rad*2
+        radOjos=diametro/12
         fullsep=diametro/3
         c=head
         sep=fullsep*(1-abs(ojos[0]))
@@ -703,7 +772,14 @@ class AnimationFrame(CustomFrame):
         y=c[1]+ojos[1]*self.rad
         r=radOjos
         self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline=color, width=3)
-        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline=color, width=3)   
+        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline=color, width=3)
+    def drawOjos(self,ojos,color):
+        x=ojos[0]
+        y=ojos[1]
+        sep=ojos[2]
+        r=ojos[3]
+        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline=color, width=3)
+        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline=color, width=3)  
     
         
 class controlPoint(object):
@@ -878,7 +954,7 @@ class DrawFrame(CustomFrame):
     def initEditPose(self,i):
         self.ant=[self.head[:],self.strokes[:],self.lastsize[:]]
         global animator
-
+        self.newPose()
         ojos=animator.stack[i][0][0]
         headp=animator.stack[i][1][0]
 
@@ -903,6 +979,7 @@ class DrawFrame(CustomFrame):
         self.canvas.config(highlightbackground="SystemButtonFace")
         if len(self.strokes)==5:
             self.hechoAction()
+        self.canvas.repaint(0)
     def insertPose(self):
         global animator
         p=self.standarPose()
@@ -1020,7 +1097,7 @@ class DrawFrame(CustomFrame):
     def dibujarOjos(self):
         diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
         rad=diametro/2
-        radOjos=diametro/10
+        radOjos=diametro/12
         fullsep=diametro/3
         c=Centroid(self.head)
         sep=fullsep*(1-abs(self.controlPoints[1].locations[0]))
@@ -1357,8 +1434,7 @@ def ordenarStroke(stroke):
         return stroke[:]
     else:
         return list(reversed(stroke))
-def toSpline(points):
-    num=20
+def toSpline(points,num=20):
     return BezierSpline(points,2,num)#bspline2D(np.array(points),2,100)
 def toShownStick(points):
     return BezierSpline(points,2,3)
@@ -1512,9 +1588,11 @@ def RecognizeCircle(pts):
     error=min(errorR,errorL)
     return error
 def getCircle(r,n):
+    n=n-1
     newpoints=[]
     for i in range(0,n):
         newpoints.append([r*math.cos(2*math.pi*i/n),r*math.sin(2*math.pi*i/n)])
+    newpoints.append([r,0])
     return newpoints
 def linealizarNew(datos,iteraciones):
     arrays=[datos]
