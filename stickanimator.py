@@ -3,6 +3,7 @@ from numpy import fft,arange, sin, pi
 from scipy import signal as sign
 import numpy as np 
 import time
+import ttk
 from Tkinter import *
 import ntpath
 import tkMessageBox
@@ -94,8 +95,15 @@ class CsvNormalizer(object):
         return angles
 def new_mainloop():
     global tasks
+    global_time=0
+    start=time.time()
+    end=time.time()
     while(True):
         master.update()
+        end=time.time()
+        dt=end-start
+        start=end
+        reproductor.advanceTime(dt)
         if(len(tasks)!=0):
             for t in tasks:
                 t()
@@ -385,14 +393,14 @@ class AnimationFrame(CustomFrame):
             if(len(self.redolist)>self.maxdolist):
                 self.redolist=self.redolist[1:]
             self.stack=self.undolist.pop()
-        self.interpolateStack()
+        self.generatePoses()
     def rehacer(self,evt=None):
         if(len(self.redolist)!=0):
             self.undolist.append(self.stack[:])
             if(len(self.undolist)>self.maxdolist):
                 self.undolist=self.undolist[1:]
             self.stack=self.redolist.pop()
-        self.interpolateStack()
+        self.generatePoses()
     def do(self):
         self.redolist=[]
         self.undolist.append(self.stack[:])
@@ -404,7 +412,7 @@ class AnimationFrame(CustomFrame):
     def cortar(self, evt):
         self.clipboard=self.interpoled[self.pointer][:]
         self.stack[self.pointer]=[]
-        self.interpolateStack()
+        self.generatePoses()
         self.do()
     def pegar(self, evt):
         i=self.pointer
@@ -413,7 +421,7 @@ class AnimationFrame(CustomFrame):
             n=i-act+1
             self.stack=self.stack+([[]]*n)
         self.stack[self.pointer]=self.clipboard[:]
-        self.interpolateStack()
+        self.generatePoses()
         self.do()
     def unirPose(self,pose):
         newpose=[]
@@ -474,19 +482,149 @@ class AnimationFrame(CustomFrame):
             inter=inter[1:]
         return list(inter)+self.getInterpolation(last)
     def interpolateStack(self):
+        #0.0620000362396
         interp=self.getInterpolation()
         self.interpoled=[]
         for v in interp:
             self.interpoled.append(self.separarPose(self.unvectorizePose(v)))
-        self.canvas.repaint(0)
 ##        self.renderStack()
     def renderStack(self):
         self.rendered=[]
         for i in range(len(self.interpoled)):
             self.rendered.append(self.renderPose(i,self.interpoled[i]))
         self.canvas.repaint(0)
-    def curveStack(stack):
-        pass
+    def generatePoses(self):
+##        self.curveBezier()
+##        self.curveBezierPoints()
+##        self.interpolateStack()
+        self.curveSpline()
+        self.canvas.repaint(0)
+    def curveSpline(self,num=20):#num=2):
+        #0.203000068665 num=20
+        interp=[]
+        for p in self.stack:
+            if(len(p)!=0):
+                interp.append(self.vectorizePose(self.unirPose(p)))
+        if len(interp)<=2:
+            self.interpolateStack()
+            return
+        n=len(interp)
+        dim=len(interp[0])
+        newint=[interp[0]]
+        for i in range(1,len(interp)):
+            point=[]
+            for j in range(dim):
+                point.append((interp[i][j]+interp[i-1][j])/2)
+            newint.append(point)
+            newint.append(interp[i])
+        interp=newint
+        K=3
+        
+        flen=((n-1)*num)+n
+        interp_array=[]
+        for i in range(dim):
+            points=np.array(interp)
+            x=bsplineAnt(points[:,i],K,flen)
+            interp_array.append(x)
+        interp_array=np.array(interp_array).T
+        interp_array=list(interp_array)
+        init=0
+        end=-1
+        n=0
+        resampled=[]
+        bet=0
+        for i in range(1,len(self.stack)):
+            if len(self.stack[i])==0:
+                n+=1
+            else:
+                resampled+=[interp_array[(num+1)*bet]]
+                end=i
+                if(n>1):
+                    resampled+=Resample(interp_array[1+((num+1)*bet):(num+1)*(bet+1)],n+2)[1:-1]
+                else:
+                    if(n==1):
+                        resampled+=[interp_array[int((1+((num+1)*bet)+(num+1)*(bet+1))/2)]]
+##                resampled+=[interp_array[(num+1)*(bet+1)]]
+                bet+=1
+                init=i                
+                n=0
+        resampled+=[interp_array[-1]]
+        self.interpoled=[]
+        for v in resampled:
+            self.interpoled.append(self.separarPose(self.unvectorizePose(v)))
+
+    def curveBezierPoints(self,num=2):
+        interp=[]
+        for p in self.stack:
+            if(len(p)!=0):
+                interp.append(self.unirPose(p))
+        n=len(interp)
+        flen=((n-1)*num)+n
+        interp=np.array(interp)
+        interp_array=[]
+        for i in range(len(interp[0])):
+            interp_array.append(BezierSpline(interp[:,i],2,flen))
+        allresampled=[]
+        for inarray in interp_array:
+            init=0
+            end=-1
+            n=0
+            resampled=[inarray[0]]
+            bet=0
+            for i in range(1,len(self.stack)):
+                if len(self.stack[i])==0:
+                    n+=1
+                else:
+                    end=i
+                    if(n>1):
+                        resampled+=Resample(inarray[1+((num+1)*bet):(num+1)*(bet+1)],n)
+                    else:
+                        if(n==1):
+                            resampled+=[inarray[int((1+((num+1)*bet)+(num+1)*(bet+1))/2)]]
+                    resampled+=[inarray[(num+1)*(bet+1)]]
+                    bet+=1
+                    init=i                
+                    n=0
+            allresampled.append(resampled)
+
+        allresampled=np.array(allresampled).T
+        self.interpoled=[]
+        for v in allresampled:
+            self.interpoled.append(self.separarPose(v))
+    def curveBezier(self,num=2):
+        
+        interp=[]
+        for p in self.stack:
+            if(len(p)!=0):
+                interp.append(self.vectorizePose(self.unirPose(p)))
+        n=len(interp)
+        flen=((n-1)*num)+n
+        interp_array=BezierSpline(interp,2,flen)
+
+        init=0
+        end=-1
+        n=0
+        resampled=[interp_array[0]]
+
+        bet=0
+        for i in range(1,len(self.stack)):
+            if len(self.stack[i])==0:
+                n+=1
+            else:
+                end=i
+                if(n>1):
+                    resampled+=Resample(interp_array[1+((num+1)*bet):(num+1)*(bet+1)],n)
+                else:
+                    if(n==1):
+                        resampled+=[interp_array[int((1+((num+1)*bet)+(num+1)*(bet+1))/2)]]
+                resampled+=[interp_array[(num+1)*(bet+1)]]
+                bet+=1
+                init=i                
+                n=0
+        self.interpoled=[]
+        for v in resampled:
+            self.interpoled.append(self.separarPose(self.unvectorizePose(v)))
+        
     def setMax(self,maxt):
         maxtimestack=len(self.stack)/self.fps
         self.maxTime=max(maxt,maxtimestack)
@@ -558,7 +696,7 @@ class AnimationFrame(CustomFrame):
         for s in posesstring.split("#"):
             self.stack.append(self.stringToPose(s))
         self.setMax(maxt)
-        self.interpolateStack()
+        self.generatePoses()
     def poseToString(self,pose):
         string=""
         for s in pose:
@@ -658,13 +796,13 @@ class AnimationFrame(CustomFrame):
         
         self.poseS=-1
         self.do()
-        self.interpolateStack()
+        self.generatePoses()
     def deletePose(self,evt):
         if(self.timepos!=0 and self.timepos<len(self.stack) and len(self.stack[self.timepos])!=0):
             if(tkMessageBox.askyesno("Eliminar pose","Seguro que quieres eliminar esta pose?")):
                 self.stack[self.timepos]=[]
         self.do()
-        self.interpolateStack()
+        self.generatePoses()
     def agregarPose(self,pose):
         i=self.timepos
         act=len(self.stack)
@@ -675,13 +813,13 @@ class AnimationFrame(CustomFrame):
         else:
             self.stack[i]=self.scalePose(pose)
         self.do()
-        self.interpolateStack()
+        self.generatePoses()
     def refreshPose(self,pose):
         self.stack[self.poseE]=self.scalePose(pose)
-##        self.interpolateStack()
+##        self.generatePoses()
         self.canvas.repaint(0)
     def endEditPose(self):
-        self.interpolateStack()
+        self.generatePoses()
         self.poseE=-1
     def scalePose(self,pose):
         escalado=[]
@@ -1363,81 +1501,17 @@ def getTorso(body):
             res=i
     return res
 def PathLength(pts):
-   d = 0
-   primera=[]
-   for a in pts:
-          if len(primera)==0:
-             primera=a
-          else:
-             d+=Distance(primera,a)
-             primera=a
-   return d
-def Vectorize(points,oSensitive=True):
-    centroid=Centroid(points)
-    points=TranslateTo(points,centroid)
-    indicativeAngle=math.atan2(points[0][1],points[0][0])
-    if oSensitive:
-        baseOrientation=(math.pi/4)*math.floor((indicativeAngle+math.pi/8)/(math.pi/4))
-        delta=baseOrientation-indicativeAngle
-    else:
-        delta=-indicativeAngle
-    total=0
-    vector=[]
-    for p in points:
-        newX=p[0]*math.cos(delta)-p[1]*math.sin(delta)
-        newY=p[1]*math.cos(delta)+p[0]*math.sin(delta)
-        vector.append(newX)
-        vector.append(newY)
-        total+=newX**2+newY**2
-    magnitude=math.sqrt(total)
-    for i in range(len(vector)):
-        vector[i]=vector[i]/magnitude
-    return vector
-def optimalCosineDistance(A,B):
-    a=0
-    b=0
-    for i in range(0,len(A),2):
-        a+=A[i]*B[i]+A[i+1]*B[i+1]
-        b+=A[i]*B[i+1]-A[i+1]*B[i]
-    angle=math.atan(b/a)
-    return math.acos(a*math.cos(angle)+b*math.sin(angle))
-def distanceAtAngle(A,B,angle):
-    newPoints=RotateBy(A,angle)
-    d=compareStrokes(newPoints,B)
-    return d
-def distanceAtBestAngle(A,B):
-    phi=(math.sqrt(5)-1)/2
-    theta=math.pi/2
-    delta=2*math.pi/180
-    x1=phi*-theta+(1-phi)*theta
-    f1=distanceAtAngle(A,B,x1)
-    x2=(1-phi)*-theta+phi*theta
-    f2=distanceAtAngle(A,B,x2)
-    ta=-theta
-    tb=theta
-    while abs(tb-(ta))>delta:
-        if f1<f2:
-            tb=x2
-            x2=x1
-            f2=f1
-            x1=phi*ta+(1-phi)*tb
-            f1=distanceAtAngle(A,B,x1)
+    d = 0
+    primera=[]
+    for a in pts:
+        if len(primera)==0:
+            primera=a
         else:
-            ta=x1
-            x1=x2
-            f1=f2
-            x2=(1-phi)*ta+phi*tb
-            f2=distanceAtAngle(A,B,x2)
-    return min(f1,f2)
-def ordenarStroke(stroke):
-    if(stroke[0][1]>stroke[len(stroke)-1][1]):
-        return stroke[:]
-    else:
-        return list(reversed(stroke))
+            d+=Distance(primera,a)
+            primera=a
+    return d
 def toSpline(points,num=20):
     return BezierSpline(points,2,num)#bspline2D(np.array(points),2,100)
-def toShownStick(points):
-    return BezierSpline(points,2,3)
 def toStick(points):
     return BezierSpline(points,2,5)#3,4
 def paintDraw(event):
@@ -1463,9 +1537,11 @@ def offset(points,p):
         for j in range(len(points[i])):
             points[i][j]+=p[j]
 def Distance(p1, p2):
-   dx = p2[0] - p1[0]
-   dy = p2[1] - p1[1]
-   return math.sqrt(dx * dx + dy * dy)
+    dim=len(p1)
+    res=0
+    for i in range(dim):
+        res+=(p2[i]-p1[i])**2
+    return math.sqrt(res)
 def Centroid(pts):
    x = 0
    y = 0
@@ -1496,35 +1572,28 @@ def clicked3Draw( event ):
         popped=draw.strokes.pop()
         draw.canvas.repaint(0)
 def Resample(pts,n):
-   points=pts[:]
-   I=PathLength(points)/(n-1)
-   D=0
-   newpoints=[list(points[0])]
-   i=1
-   while i<len(points):
-      d=Distance(points[i-1],points[i])
-      if (D+d)>=I:
-         qx=points[i-1][0]+((I-D)/d)*(points[i][0]-points[i-1][0])
-         qy=points[i-1][1]+((I-D)/d)*(points[i][1]-points[i-1][1])
-         q=[qx,qy]
-         points.insert(i,q) 
-         newpoints.append(q)
-         D=0
-      else:
-         D+=d
-      i+=1
-   if(len(newpoints)<n):
-      newpoints.append(pts[len(pts)-1])
-   return newpoints
-def getRoundest(pts):
-    minv=99999999
-    result=-1
-    for i in range(len(pts)):
-        error=RecognizeCircle(pts[i])
-        if(error<minv):
-            minv=error
-            result=i
-    return result
+    points=pts[:]
+    I=PathLength(points)/(n-1)
+    D=0
+    newpoints=[list(points[0])]
+    i=1
+    dim=len(points[0])
+    while i<len(points):
+        d=Distance(points[i-1],points[i])
+        p=[]
+        if (D+d)>=I:
+            for di in range(dim):
+                q=points[i-1][di]+((I-D)/d)*(points[i][di]-points[i-1][di])
+                p.append(q)
+            points.insert(i,p) 
+            newpoints.append(p)
+            D=0
+        else:
+            D+=d
+        i+=1
+    if(len(newpoints)<n):
+        newpoints.append(pts[len(pts)-1])
+    return newpoints
 def getRadius(pts):
     data=[]
     center=Centroid(pts)
@@ -1569,24 +1638,6 @@ def RotateBy(pts, radians):
       qy=(a[0]-c[0])*sin+(a[1]-c[1])*cos+c[1]
       newpoints.append([qx,qy])
    return newpoints
-
-def RecognizeCircle(pts):
-    num=250
-    size=100
-    r=size/2
-    c=Centroid(pts)
-    a=IndicativeAngle(pts)
-    newpts=RotateBy(pts,math.pi-a)
-    newpts=Resample(newpts,num)
-    newpts=TranslateTo(newpts,[0,0])
-    newpts=ScaleTo(newpts, 100)
-    Rcircle=getCircle(r,num)
-    Lcircle=Rcircle[:]
-    Lcircle.reverse()
-    errorR=compareStrokes(Rcircle,newpts)
-    errorL=compareStrokes(Lcircle,newpts)
-    error=min(errorR,errorL)
-    return error
 def getCircle(r,n):
     n=n-1
     newpoints=[]
@@ -1641,22 +1692,381 @@ def getSublineScore(array):
             linei=i
     return [linei,maxScore[1]]
 class ReproductorFrame(CustomFrame):
-    canvas=0    
+    canvas=0
+    reproduccion_toolbar=0
+    animframe=0
+    play_pause=0
+    stop_button=0
+    playgif=0
+    stopgif=0
+    rad=25
+    pausegif=0
+    progress=0
+    playing=0
+    globaltime=0
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de reproducción")
         self.grid(column=1,row=1,sticky=W+E+N+S)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
+        self.reproduccion_toolbar=Frame(self)
+        global animator
+        self.animframe=animator
+        self.playing=False
+        self.canvas.topaint.append(self.redraw)
+        self.playgif=PhotoImage(file="play.gif")
+        self.stopgif=PhotoImage(file="stop.gif")
+        self.pausegif=PhotoImage(file="pause.gif")
+        self.bind("<Configure>",self.setHeightToolbar)
+        self.play_pause = Button(self.reproduccion_toolbar, command = self.play,image=self.playgif,width="20",height="20")
+        self.stop_button = Button(self.reproduccion_toolbar, command = self.stop,image=self.stopgif,width="20",height="20")
+        self.reproduccion_toolbar.pack(side=BOTTOM,fill="x")
+        self.progress = ttk.Progressbar(self.reproduccion_toolbar, maximum=100)
+##        self.progress.bind("<Button-1>", setFrame)
+##        self.progress.bind("<Motion>", motionProgress)
+##        self.progress.bind("<Leave>", outProgress)
+        self.stop_button.pack(side="left")
+        self.play_pause.pack(side="left")
+        self.progress.pack(side="left",expand=1, fill=BOTH)
+    def redraw(self):
+        if self.playing:
+            if self.animframe.timepos<len(self.animframe.interpoled):
+                self.dibujarPose(self.animframe.interpoled[self.animframe.timepos])
+            else:
+                self.animframe.timepos=0
+                self.pause()
+    def setHeightToolbar(self,evt):
+        self.canvas.config(height=evt.widget.canvas.winfo_height()-26)
+        self.reproduccion_toolbar.config(height=26)
+    def advanceTime(self,dt):
+        if not self.playing:
+            return
+        self.globaltime+=dt
+        n=int(self.globaltime/(1/self.animframe.fps))
+        if n>0:
+            self.globaltime-=n/self.animframe.fps
+            self.animframe.timepos+=n
+            self.animframe.canvas.repaint(0)
+            self.canvas.repaint(0)
+    def play(self):
+        self.playing=True
+        self.play_pause.config(image=self.pausegif,width="20",height="20",command = self.pause)
+    def pause(self):
+        self.playing=False
+        self.play_pause.config(image=self.playgif,width="20",height="20",command = self.play)
+    def stop(self):
+        self.pause()
+        self.animframe.timepos=0
+        self.progress["value"] = 0
+        self.animframe.canvas.repaint(0)
+        self.canvas.repaint(0)
+    def dibujarPose(self,pose,color="black",num=9):
+        if len(pose)==0:
+            return
+        todraw=[]
+        ojos=pose[0]
+        for i in range(1,len(pose)):
+            todraw+=pose[i]
+        c=Centroid(todraw)
+        p=[self.canvas.winfo_width()/2,self.canvas.winfo_height()/2]
+        todraw=TranslateTo(todraw,[p[0],p[1]])
+        head=getCircle(self.rad,num*2)
+        head=TranslateTo(head,todraw[0])
+        self.dibujarOjos(todraw[0],ojos[0],color)
+        separados=[]
+        stroke=[]
+        for i in range(1,len(todraw)):
+            stroke.append(todraw[i])
+            if(len(stroke)==5):
+                separados.append(stroke)
+                stroke=[]
+        self.drawAllNormal(separados,color,num)
+        self.drawPoints(head,color)
+    def drawAllNormal(self,All,color,num=20):
+        for a in All:
+            self.drawPoints(toSpline(a,num),color)
+    def drawPoints(self,todraw,color):
+        global primera 
+        primera=[]
+        for a in todraw:
+            drawPluma(self.canvas,a,color)
+    def dibujarOjos(self,head,ojos,color):
+        diametro=self.rad*2
+        radOjos=diametro/12
+        fullsep=diametro/3
+        c=head
+        sep=fullsep*(1-abs(ojos[0]))
+        x=c[0]+ojos[0]*self.rad
+        y=c[1]+ojos[1]*self.rad
+        r=radOjos
+        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline=color, width=3)
+        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline=color, width=3)
+    
         
 class AvatarFrame(CustomFrame):
     canvas=0
-    
+    points=[]
+    rendered=[]
+    splined=[]
+    indexes=[]
+    between=[0,11,7,5,3,1,0]
+    stack=[]
+    interpoled=[]
     def __init__(self,master):
+        self.rad=10
         CustomFrame.__init__(self,master,"área del avatar")
         self.grid(column=2,row=1,sticky=W+E+N+S)
         self.canvas=CustomCanvas(self)
         self.canvas.pack(expand=1,fill=BOTH)
+        self.canvas.bind("<Button-1>",self.click)
+        self.canvas.bind("<Button-3>", self.release)
+        self.canvas.topaint.append(self.redraw)
+    def fitStack(self):
+        n=0
+        for i in range(1,len(self.stack)):
+           if(len(self.stack[-i])==0):
+               n+=1
+           else:
+               break
+        if(n==0):
+            return
+        self.stack=self.stack[:-n]
+    def getInterpolation(self,init=0):
+        if(init==-1 or init==len(self.stack)-1):
+            return []
+        last=-1
+        for i in range(init+1,len(self.stack)):
+            if(len(self.stack[i])!=0):
+                last=i
+                break
+        n=last-init+1
+        v1=self.stack[init]
+        v2=self.stack[last]
+        inter=[np.linspace(i,j,n) for i,j in zip(v1,v2)]
+        inter=np.array(inter).T
+        if init!=0:
+            inter=inter[1:]
+        return list(inter)+self.getInterpolation(last)
+    def interpolateStack(self):
+        interp=self.getInterpolation()
+        self.interpoled=[]
+        for v in interp:
+            self.interpoled.append(v)
+        
+    def curveSpline(self,num=2):
+        interp=[]
+        for p in self.stack:
+            if(len(p)!=0):
+                interp.append(p)
+        if len(interp)<=2:
+            return
+        n=len(interp)
+        dim=len(interp[0])
+        newint=[interp[0]]
+        for i in range(1,len(interp)):
+            point=[]
+            for j in range(dim):
+                point.append((interp[i][j]+interp[i-1][j])/2)
+            newint.append(point)
+            newint.append(interp[i])
+        interp=newint
+        K=3
+        
+        flen=((n-1)*num)+n
+        interp_array=[]
+        for i in range(dim):
+            points=np.array(interp)
+            x=bsplineAnt(points[:,i],K,flen)
+            interp_array.append(x)
+        interp_array=np.array(interp_array).T
+        interp_array=list(interp_array)
+        init=0
+        end=-1
+        n=0
+        resampled=[]
+        bet=0
+        for i in range(1,len(self.stack)):
+            if len(self.stack[i])==0:
+                n+=1
+            else:
+                resampled+=[interp_array[(num+1)*bet]]
+                end=i
+                if(n>1):
+                    resampled+=Resample(interp_array[1+((num+1)*bet):(num+1)*(bet+1)],n+2)[1:-1]
+                else:
+                    if(n==1):
+                        resampled+=[interp_array[int((1+((num+1)*bet)+(num+1)*(bet+1))/2)]]
+##                resampled+=[interp_array[(num+1)*(bet+1)]]
+                bet+=1
+                init=i                
+                n=0
+        resampled+=[interp_array[-1]]
+        print len(resampled)
+        self.interpoled=[]
+        for v in resampled:
+            self.interpoled.append(v)
+        self.canvas.repaint(0)
+    def curves(self,num=1):
+        if(len(self.points)<3):
+            self.canvas.repaint(0)
+            return
+        dim=len(self.points[0])
+        K=3
 
+     
+        exp=5
+        n=num+1
+        rendered1=[]
+
+        for i in range(1,len(self.points)):
+            for k in range(n):
+                p=[]
+                for j in range(dim):
+                    vI=self.points[i-1][j]
+                    vF=self.points[i][j]
+                    vD=(vF-vI)/2
+                    mul=float(k)/(n)
+                    mul=2*(0.5-mul)
+                    s=1
+                    if(mul!=0):
+                        s=abs(mul)/mul
+                    p.append(vI+vD-((vD*mul)**exp)/(vD*s)**(exp-1))
+                rendered1.append(p)
+        rendered1.append(self.points[-1][:])
+        self.rendered=rendered1
+
+        
+##        for i in range(1,len(self.points)):
+##            for k in range(n):
+##                p=[]
+##                for j in range(dim):
+##                    vI=self.points[i-1][j]
+##                    vF=self.points[i][j]
+##                    vD=(vF-vI)/2
+##                    mul=float(k)/(n)
+##                    mul=2*(0.5-mul)
+##                    
+##                    s=1
+##                    if(mul!=0):
+##                        s=abs(mul)/mul
+##                    if mul==0:
+##                        mul=0.01
+##                    p.append(vI+vD-vD*s*abs(mul)**(1.0/exp))
+####                    p.append(vI+vD-vD*s*abs(mul)**0.5)
+##                rendered1.append(p)
+##        rendered1.append(self.points[-1][:])
+##        self.rendered=rendered1
+
+        n=len(self.points)
+        flen=((n-1)*num)+n
+        rendered2=[]
+        for i in range(dim):
+##            points=np.array(self.points)
+##            x=bsplineAnt(points[:,i],K,flen)
+            points=np.array(self.rendered)
+            x=bsplineAnt(points[:,i],K,len(self.rendered)*10)
+            rendered2.append(x)
+        rendered2=np.array(rendered2).T
+        self.splined=rendered2
+
+
+
+
+
+
+ 
+
+##        self.splined=[]
+##        for i in range(len(rendered1)):
+####            n=i/(num+1)
+####            im=(num+1)*(n+0.5)
+####            mul1=2*abs(i-im)/(num+1)
+####            if mul1==0:
+####                mul1=0.01
+####            mul2=1.0-mul1
+##            mul2=0.5**(exp/5)
+##            mul1=1.0-mul2
+##            p=[]
+##            for j in range(dim):
+##                p.append(rendered1[i][j]*0.75+rendered2[i][j]*0.25)
+##            self.splined.append(p)
+##        self.splined=Resample(self.splined,len(self.splined))
+##   
+
+##        interp=[]
+##        n=len(self.points)
+##        flen=((n-1)*num)+n
+##        interp_array=BezierSpline(self.points,K,flen)
+##        distances=[]
+##        for p in self.points:
+##            np=[99999]
+##            distances.append(np)
+##        self.indexes=[-1]*len(self.points)
+##        for i in range(len(interp_array)):
+##            for j in range(len(self.points)):
+##                p=interp_array[i]
+##                d=Distance(p,self.points[j])
+##                if d<distances[j]:
+##                    distances[j]=d
+##                    self.indexes[j]=i
+##                    
+##    
+##        init=0
+##        end=-1
+##        n=0
+##        resampled=[interp_array[0]]
+##        bet=0
+##        for i in range(1,len(self.points)):
+##            if len(self.points[i])==0:
+##                n+=1
+##            else:
+##                end=i
+##                if(n>1):
+##                    resampled+=Resample(interp_array[1+((num+1)*bet):(num+1)*(bet+1)],n)
+##                else:
+##                    if(n==1):
+##                        resampled+=[interp_array[int((1+((num+1)*bet)+(num+1)*(bet+1))/2)]]
+##                resampled+=[interp_array[(num+1)*(bet+1)]]
+##                bet+=1
+##                init=i                
+##                n=0
+##        self.rendered=interp_array
+        self.canvas.repaint(0)
+    def redraw(self):
+        r=self.rad
+        for p in self.stack:
+            if len(p)!=0:
+                self.canvas.create_oval(p[0]-r/2,p[1]-r/2,p[0]+r/2,p[1]+r/2,fill="red")
+        r=self.rad*0.5
+        n=5+1
+##        for i in range(len(self.rendered)):
+##            p=self.rendered[i]
+##            self.canvas.create_oval(p[0]-r/2,p[1]-r/2,p[0]+r/2,p[1]+r/2,fill="blue")
+##        r=self.rad*0.75
+##        for i in range(len(self.splined)):
+##            p=self.splined[i]
+##            self.canvas.create_oval(p[0]-r/2,p[1]-r/2,p[0]+r/2,p[1]+r/2,fill="yellow")
+
+        for i in range(len(self.interpoled)):
+            p=self.interpoled[i]
+            self.canvas.create_oval(p[0]-r/2,p[1]-r/2,p[0]+r/2,p[1]+r/2,fill="yellow")
+
+    def click(self,evt):
+##        self.points.append([evt.x,evt.y])
+        
+        n=5
+        if len(self.between)>0:
+            n=self.between.pop(0)
+        self.stack=self.stack+([[]]*n)
+        self.stack.append([evt.x,evt.y])
+##        self.interpolateStack()
+        self.curveSpline()
+##        self.curves()
+    def release(self,evt):
+        self.stack=self.stack[:-1]
+##        self.interpolateStack()
+        self.curveSpline()
+##        self.curves()
 global customframes       
 global animator
 global draw
@@ -1674,6 +2084,11 @@ def drawLapiz(canvas,pt):
     else:
         canvas.create_line(primera[0],primera[1],pt[0],pt[1],fill ="gray",width=3)
         primera=pt
+def drawPoints(canvas,points,color):
+    global primera
+    primera=[]
+    for p in points:
+        drawPluma(canvas,p,color)
 def drawPluma(canvas,pt,color):
     global primera
     if len(primera)==0:
