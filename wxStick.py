@@ -5,6 +5,7 @@ from PIL import Image
 import numpy as np
 import wx.lib.scrolledpanel as scrolled
 import scipy.interpolate as si
+import time
 def bsplineAnt(d, K=3, N=100):
     K=min(len(d)-1,K)
     t = range(len(d))
@@ -65,6 +66,7 @@ class CustomPanel(scrolled.ScrolledPanel):
     span=0
     topaint=0
     dc=0
+    title=0
     def __init__(self,mainwindow,sizer,p=(0,0),sp=(1,1),title="desconocido"):
         scrolled.ScrolledPanel.__init__(self,mainwindow.panel)#, size=(300, 250)
         self.mainwindow=mainwindow
@@ -82,14 +84,16 @@ class CustomPanel(scrolled.ScrolledPanel):
         Pimage = Image.open(path)
         Pimage = Pimage.resize((self.sizepin,self.sizepin), Image.ANTIALIAS)
         self.pin.addHoldingImage(wx.BitmapFromImage(piltoimage(Pimage)))
-        
-        
-        self.sizer=wx.BoxSizer(wx.HORIZONTAL)
+                
+        self.sizer=wx.BoxSizer(wx.VERTICAL)
+        self.title=wx.BoxSizer(wx.HORIZONTAL)
         self.label=wx.StaticText(self,label=title)
         self.label.SetBackgroundColour((255,255,255))
         
-        self.sizer.Add(self.pin,flag=wx.ALIGN_LEFT)
-        self.sizer.Add(self.label,flag=wx.ALIGN_LEFT)
+        self.title.Add(self.pin,flag=wx.ALIGN_LEFT)
+        self.title.Add(self.label,flag=wx.ALIGN_LEFT)
+
+        self.sizer.Add(self.title,flag=wx.ALIGN_TOP,proportion=1)
         self.SetSizer(self.sizer)
         self.Layout()
         self.font=wx.Font(14, wx.DEFAULT, wx.NORMAL, wx.NORMAL, False,u'MV Boli')
@@ -169,7 +173,7 @@ class MainWindow(wx.Frame):
         self.customs=[]
         self.customs.append(AnimationFrame(self,self.bagSizer))
         self.customs.append(DrawFrame(self,self.bagSizer))
-        self.customs.append(CustomPanel(self,self.bagSizer,title="area de reproduccion",p=(1,1)))
+        self.customs.append(ReproductorFrame(self,self.bagSizer,self.customs[0]))
         self.customs.append(CustomPanel(self,self.bagSizer,title="area del avatar",p=(1,2)))
         self.bagSizer.AddGrowableRow(0)
         self.bagSizer.AddGrowableRow(1)
@@ -193,48 +197,199 @@ class MainWindow(wx.Frame):
         citem = fileMenu.Append(wx.ID_ANY, 'Cargar', 'cargar una animación')
         self.Bind(wx.EVT_MENU, self.loadCallBack, citem)
 
-        fitem = fileMenu.Append(wx.ID_EXIT, 'Cerrar', 'Cerrar la aplicación')
+        fitem = fileMenu.Append(wx.ID_ANY, 'Cerrar', 'Cerrar la aplicación')
         self.Bind(wx.EVT_MENU, self.Salir, fitem)
+
+
+
+        anim=self.customs[0]
+        editionMenu=wx.Menu()
+
+        copitem=editionMenu.Append(wx.ID_ANY,"Copiar","copiar la pose")
+        self.Bind(wx.EVT_MENU,anim.copiar,copitem)
+
+        coritem=editionMenu.Append(wx.ID_ANY,"Cortar","cortar la pose")
+        self.Bind(wx.EVT_MENU,anim.cortar,coritem)
+
+        pegitem=editionMenu.Append(wx.ID_ANY,"Pegar","pegar la pose")
+        self.Bind(wx.EVT_MENU,anim.pegar,pegitem)
+
+        desitem=editionMenu.Append(wx.ID_ANY,"Deshacer","deshacer la última acción")
+        self.Bind(wx.EVT_MENU,anim.deshacer,desitem)
+
+        reitem=editionMenu.Append(wx.ID_ANY,"Rehacer","rehacer la última acción")
+        self.Bind(wx.EVT_MENU,anim.rehacer,reitem)
+
+        timeitem=editionMenu.Append(wx.ID_ANY,"Cambiar el tiempo máximo", "cambia el tiempo máximo del área de animación")
+        self.Bind(wx.EVT_MENU,self.configTime,timeitem)
         
+        self.accel_tbl = wx.AcceleratorTable([(wx.ACCEL_CTRL, ord('C'),copitem.GetId()),
+                                              (wx.ACCEL_CTRL, ord('X'),coritem.GetId()),
+                                              (wx.ACCEL_CTRL, ord('V'),pegitem.GetId()),
+                                              (wx.ACCEL_CTRL, ord('Z'),desitem.GetId()),
+                                              (wx.ACCEL_CTRL, ord('R'),reitem.GetId()),
+                                             ])
+        self.SetAcceleratorTable(self.accel_tbl)
+ 
         menubar.Append(fileMenu, '&File')
+        menubar.Append(editionMenu, '&Edición')
         self.SetMenuBar(menubar)
 
         self.Show(True)
+    def configTime(self,evt):
+        anim=self.customs[0]
+        s=ask(self,"escriba el tiempo máximo a usarse en el área de animación", default_value=str(anim.maxTime))
+        s=''.join(c for c in s if c.isdigit() or c=='.')
+        anim.setMax(float(s))
     def saveCallBack(self,evt):
         saveFileDialog = wx.FileDialog(self, "Guardar animación", "", "","ANIM files (*.anim)|*.anim", wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT)
         if saveFileDialog.ShowModal() == wx.ID_CANCEL:
             return
-        output_stream = wx.FileOutputStream(saveFileDialog.GetPath())
-        if not output_stream.IsOk():
-            wx.LogError("Cannot save current contents in file '%s'."%saveFileDialog.GetPath())
-            return
-        global main
-        animator=main.customs[0]
+        filename=saveFileDialog.GetPath()
+        filename = open(filename, 'w')
+        animator=self.customs[0]
         s=animator.toString()
-        output_stream.write(s)
-        output_stream.close()
+        filename.write(s)
+        filename.close()
     def loadCallBack(self,evt):
         if wx.MessageBox("Cargar animacion?", "confirmar por favor",wx.ICON_QUESTION | wx.YES_NO, self) == wx.NO:
             return
-        openFileDialog = wx.FileDialog(self, "Guardar animación", "", "","ANIM files (*.anim)|*.anim", wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        openFileDialog = wx.FileDialog(self, "Cargar animación", "", "","ANIM files (*.anim)|*.anim", wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
         if openFileDialog.ShowModal() == wx.ID_CANCEL:
             return
         filename=openFileDialog.GetPath()
         filename = open(filename, 'r')
         string=filename.read()
-        global main
-        animator=main.customs[0]
+        animator=self.customs[0]
         animator.loadAnimation(string)
         filename.close()
     def Salir(self, e):
         self.Close()
+class ReproductorFrame(CustomPanel):
+    canvas=0
+    reproduccion_toolbar=0
+    animframe=0
+    play_pause=0
+    stop_button=0
+    playgif=0
+    stopgif=0
+    rad=25
+    pausegif=0
+    progress=0
+    playing=0
+    globaltime=0
+    start=0
+    def __init__(self,mainwindow,sizer,animframe):
+        CustomPanel.__init__(self,mainwindow,sizer,title="área de reproducción",p=(1,1))
+        self.reproduccion_toolbar=wx.BoxSizer(wx.HORIZONTAL)
+        self.stop_button=CustomButton(self,wx.Bitmap("stopL.gif"),self.stop,"detener la animación")
+        self.stop_button.addHoldingImage(wx.Bitmap("stop.gif"))        
+        self.play_pause=CustomButton(self,wx.Bitmap("playL.gif"),self.play,"reproducir la animación")
+        self.play_pause.addHoldingImage(wx.Bitmap("play.gif"))
+        self.progress = wx.Gauge(self)
+        self.animframe=animframe
+        self.reproduccion_toolbar.Add(self.stop_button,flag=wx.ALIGN_LEFT|wx.LEFT)
+        self.reproduccion_toolbar.Add(self.play_pause,flag=wx.ALIGN_LEFT|wx.LEFT)
+        self.reproduccion_toolbar.Add(self.progress,proportion=1)
+        self.sizer.Add(self.reproduccion_toolbar,flag=wx.ALIGN_BOTTOM|wx.EXPAND)
+
+        self.Layout()
+        self.Refresh()
+        
+        self.playing=False
+        self.topaint.append(self.redraw)
+    def redraw(self,dc):
+        if self.playing:
+            if self.animframe.timepos<len(self.animframe.interpoled):
+                self.dibujarPose(self.animframe.interpoled[self.animframe.timepos],dc)
+            else:
+                self.animframe.timepos=0
+                self.pause(0)
+    def startTimer(self):
+        self.start=time.time()
+        self.updateTime()
+    def updateTime(self):
+        end=time.time()
+        dt=end-self.start
+        self.advanceTime(dt)
+        if self.playing:
+            wx.CallLater(1000.0/self.animframe.fps,self.updateTime)
+        self.start=end
+    def advanceTime(self,dt):
+        if not self.playing:
+            return
+        self.globaltime+=dt
+        n=int(self.globaltime/(1/self.animframe.fps))
+        if n>0:
+            self.globaltime-=n/self.animframe.fps
+            self.animframe.timepos+=n
+            self.progress.SetValue(self.progress.GetValue()+n)
+            self.animframe.Refresh()
+            self.Refresh()
+    def play(self,evt):
+        self.playing=True
+        self.play_pause.SetToolTip(wx.ToolTip("pausar la animación"))
+        normal=wx.Bitmap("pauseL.gif")
+        pressed=wx.Bitmap("pause.gif")
+        self.play_pause.normal=normal
+        self.play_pause.pressed=pressed
+        self.play_pause.SetBitmap(self.play_pause.normal)
+        self.play_pause.Bind(wx.EVT_LEFT_DOWN,self.pause)
+        self.startTimer()
+    def pause(self,evt):
+        self.playing=False
+        self.play_pause.SetToolTip(wx.ToolTip("reproducir la animación"))
+        normal=wx.Bitmap("playL.gif")
+        pressed=wx.Bitmap("play.gif")
+        self.play_pause.normal=normal
+        self.play_pause.pressed=pressed
+        self.play_pause.SetBitmap(self.play_pause.normal)
+        self.play_pause.Bind(wx.EVT_LEFT_DOWN,self.play)
+    def stop(self,evt):
+        self.pause(0)
+        self.animframe.timepos=0
+        self.progress.SetValue(0)    
+        self.animframe.Refresh()
+        self.Refresh()
+    def dibujarPose(self,pose,dc,num=9):
+        if len(pose)==0:
+            return
+        todraw=[]
+        ojos=pose[0]
+        for i in range(1,len(pose)):
+            todraw+=pose[i]
+        c=Centroid(todraw)
+        size=self.GetSize()
+        p=[size[0]/2,size[1]/2]
+        todraw=TranslateTo(todraw,[p[0],p[1]])
+        head=getCircle(self.rad,num)
+        head=TranslateTo(head,todraw[0])
+        self.dibujarOjos(todraw[0],ojos[0],dc)
+        separados=[]
+        stroke=[]
+        for i in range(1,len(todraw)):
+            stroke.append(todraw[i])
+            if(len(stroke)==5):
+                separados.append(stroke)
+                stroke=[]
+        drawAllNormal(self,separados,dc)
+        drawPoints(self,head,dc)
+    def dibujarOjos(self,head,ojos,dc):
+        diametro=self.rad*2
+        radOjos=diametro/12
+        fullsep=diametro/3
+        c=head
+        sep=fullsep*(1-abs(ojos[0]))
+        x=c[0]+ojos[0]*self.rad
+        y=c[1]+ojos[1]*self.rad
+        r=radOjos
+        dc.DrawCircle(x+sep,y, r)
+        dc.DrawCircle(x-sep,y, r)
+    
 class AnimationFrame(CustomPanel):
     h_off=60
     pointer=0
     timepos=0
-    hbar=0
-    botframe=0
-    maxText=0
     fps=30.0
     stack=0
     interpoled=0
@@ -262,30 +417,50 @@ class AnimationFrame(CustomPanel):
         self.Bind(wx.EVT_LEFT_DOWN,self.clickedTime)
         self.Bind(wx.EVT_MOTION,self.moveTime)
         self.Bind(wx.EVT_LEFT_UP,self.releaseTime)
-##        self.Bind("<Double-Button-1>",self.doubleTime)
-##        self.Bind('<Control-c>', self.copiar)
-##        self.Bind('<Control-x>', self.cortar)
-##        self.Bind('<Control-v>', self.pegar)
-##        self.Bind('<Control-z>', self.deshacer)
-##        self.Bind('<Control-r>', self.rehacer)
-##        self.Bind("<Delete>",self.deletePose)
-        
-##        self.botframe=Frame(self)
-##        self.botframe.pack(side=BOTTOM,fill=X)
-##        self.hbar=Scrollbar(self.botframe,orient=HORIZONTAL)
-##        self.hbar.pack(side=LEFT,expand=1,fill=X)
-##        self.hbar.config(command=self.canvas.xview)
-##        self.canvas.config(xscrollcommand=self.scrollbarset)
-##        
-##        self.maxText = Text(self.botframe,height=1,width=6,font=self.customFont)
-##        self.maxText.bind("<Return>", self.changeMax)
-##        self.maxText.bind("<Button-1>", self.enableMax)
-##        self.canvas.config(scrollregion=(0,0,self.maxTime/self.spc,0))
-##        self.maxText.insert(INSERT,str(self.maxTime)+"s")
+        self.Bind(wx.EVT_LEFT_DCLICK,self.doubleTime)
+        self.Bind(wx.EVT_KEY_DOWN,self.deletePose)
+
         self.setLine(self.maxTime/self.spc)
-##        self.SetSizeHints(minW=self.maxTime/self.spc, minH=-1)
         self.timepos=0
         self.pointer=0
+    def deshacer(self,evt=None):
+        if(len(self.undolist)!=0):
+            self.redolist.append(self.stack[:])
+            if(len(self.redolist)>self.maxdolist):
+                self.redolist=self.redolist[1:]
+            self.stack=self.undolist.pop()
+        self.generatePoses()
+    def rehacer(self,evt=None):
+        if(len(self.redolist)!=0):
+            self.undolist.append(self.stack[:])
+            if(len(self.undolist)>self.maxdolist):
+                self.undolist=self.undolist[1:]
+            self.stack=self.redolist.pop()
+        self.generatePoses()
+    def copiar(self, evt=None):
+        self.clipboard=self.interpoled[self.pointer][:]
+    def cortar(self, evt):
+        self.clipboard=self.interpoled[self.pointer][:]
+        self.stack[self.pointer]=[]
+        self.generatePoses()
+        self.do()
+    def pegar(self, evt):
+        i=self.pointer
+        act=len(self.stack)
+        if i>=act:
+            n=i-act+1
+            self.stack=self.stack+([[]]*n)
+        self.stack[self.pointer]=self.clipboard[:]
+        self.generatePoses()
+        self.do()
+    def deletePose(self,evt):
+        if wx.WXK_DELETE!=evt.GetKeyCode():
+            return
+        if(self.timepos!=0 and self.timepos<len(self.stack) and len(self.stack[self.timepos])!=0):
+            if wx.MessageDialog(self, "Seguro que quieres eliminar esta pose?","Eliminar pose", wx.YES_NO | wx.ICON_QUESTION).ShowModal() == wx.ID_YES:
+                self.stack[self.timepos]=[]
+        self.do()
+        self.generatePoses()    
     def fitStack(self):
         n=0
         for i in range(1,len(self.stack)):
@@ -296,6 +471,13 @@ class AnimationFrame(CustomPanel):
         if(n==0):
             return
         self.stack=self.stack[:-n]
+    def doubleTime(self,evt):
+        i=self.getStackPos(self.recalculateCanvas(evt.x))
+        if i!=0 and i<len(self.stack) and len(self.stack[i])!=0:
+            global main
+            draw=main.customs[1]
+            draw.initEditPose(i)
+            self.poseE=i
     def getInterpolation(self,init=0):
         if(init==-1 or init==len(self.stack)-1):
             return []
@@ -317,28 +499,60 @@ class AnimationFrame(CustomPanel):
         self.undolist.append(self.stack[:])
         if(len(self.undolist)>self.maxdolist):
             self.undolist=self.undolist[1:]
-        
+    def toString(self):
+        s=""
+        s+=str(self.maxTime)
+        s+="@"
+        for pose in self.stack:
+            s+=self.poseToString(pose)
+            s+="#"
+        s=s[:-1]
+        return s
+    
     def interpolateStack(self):
-        #0.0620000362396
+        if len(self.stack)<=1:
+            self.interpoled=self.stack[:]
+            return
         interp=self.getInterpolation()
         self.interpoled=[]
         for v in interp:
             self.interpoled.append(self.separarPose(self.unvectorizePose(v)))
-##        self.renderStack()
-    
+    def scalePose(self,pose):
+        escalado=[]
+        escalado.append(pose[0])
+        for i in range(1,len(pose)):
+            escalado.append([])
+            for p in pose[i]:
+                escalado[-1].append([p[0]*self.rad,p[1]*self.rad])
+        return escalado
     def setMax(self,maxt):
         maxtimestack=len(self.stack)/self.fps
         self.maxTime=max(maxt,maxtimestack)
         self.setLine(self.maxTime/self.spc)
         self.Refresh()
+    def agregarPose(self,pose):
+        i=self.timepos
+        act=len(self.stack)
+        if i>=act:
+            n=i-act
+            self.stack=self.stack+([[]]*n)
+            self.stack.append(self.scalePose(pose))
+        else:
+            self.stack[i]=self.scalePose(pose)
+        self.do()
+        self.generatePoses()
+    def refreshPose(self,pose):
+        self.stack[self.poseE]=self.scalePose(pose)
+        self.Refresh()
+    def endEditPose(self):
+        self.generatePoses()
+        self.poseE=-1
     def generatePoses(self):
-##        self.curveBezier()
-##        self.curveBezierPoints()
-##        self.interpolateStack()
         self.curveSpline()
         self.Refresh()
-    def curveSpline(self,num=20):#num=2):
-        #0.203000068665 num=20
+        global main
+        main.customs[2].progress.SetRange(len(self.interpoled))
+    def curveSpline(self,num=20):
         interp=[]
         for p in self.stack:
             if(len(p)!=0):
@@ -382,7 +596,6 @@ class AnimationFrame(CustomPanel):
                 else:
                     if(n==1):
                         resampled+=[interp_array[int((1+((num+1)*bet)+(num+1)*(bet+1))/2)]]
-##                resampled+=[interp_array[(num+1)*(bet+1)]]
                 bet+=1
                 init=i                
                 n=0
@@ -425,9 +638,10 @@ class AnimationFrame(CustomPanel):
         
     def setLine(self,length):
         self.line.Destroy()
-        length=max(1,length-self.label.GetSize()[0])
+        length+=30
         self.line=wx.StaticLine(self, -1, size=(length, -1))
-        self.sizer.Add(self.line, 0, 0, 5)
+        self.sizer.Add(self.line, flag=wx.ALIGN_BOTTOM)
+        self.SetupScrolling(scroll_y=False)
     def clickedTime(self,evt):
         self.poseS=-1
         if(len(self.stack)==0):
@@ -507,18 +721,15 @@ class AnimationFrame(CustomPanel):
         
         self.drawAllTimeMarks(dc)
         self.drawTimeline(dc)
-        setLapizClaro(dc)
-
-        
+        setLapizClaro(dc) 
         self.drawInterpoled(dc)
         self.drawStack(dc)
-##        if self.poseS!=-1:
-##            self.dibujarPose(self.pointer,self.stack[self.poseS],"red")
+        if self.poseS!=-1:
+            setPluma(dc,"red")
+            self.dibujarPose(self.pointer,self.stack[self.poseS],dc)
         self.drawPointer(dc)
         self.drawTimePos(dc)
     def drawStack(self,dc):
-##        ind=self.hbar.get()[0]
-##        recorrido=ind*self.maxTime/self.spc
         size=self.GetSize()
         recorrido=self.CalcUnscrolledPosition((0,0))[0]
         t=recorrido*self.spc
@@ -569,8 +780,6 @@ class AnimationFrame(CustomPanel):
         x=c[0]+ojos[0]*self.rad
         y=c[1]+ojos[1]*self.rad
         r=radOjos
-##        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline=color, width=3)
-##        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline=color, width=3)
         dc.DrawCircle(x+sep,y, r)
         dc.DrawCircle(x-sep,y, r)
     def recalculateCanvas(self,x):
@@ -606,8 +815,6 @@ class AnimationFrame(CustomPanel):
         pI=(wid-0+14-recorrido,he-self.h_off)
         pF=(self.GetVirtualSize()[0]-recorrido+14,he-self.h_off)
         dc.DrawLine(pI[0],pI[1],pF[0],pF[1])
-##        dc.DrawLabel("tiempo maximo: "+"{0:.2f}".format(self.maxTime)+"s",wx.Rect(pI[0]-100,pI[1]-20,10,10))      
-    
     def drawAllTimeMarks(self,dc):
         recorrido=self.CalcUnscrolledPosition((0,0))[0]
         t=recorrido*self.spc
@@ -635,6 +842,7 @@ class DrawFrame(CustomPanel):
     proportions=0
     clicked=False
     finishedsizer=0
+    ant=[]
     def __init__(self,mainwindow,sizer):
         CustomPanel.__init__(self,mainwindow,sizer,title="área de dibujo",p=(1,0))
         self.currentpoints=[]
@@ -659,6 +867,53 @@ class DrawFrame(CustomPanel):
         self.label.SetCursor(wx.StockCursor(wx.CURSOR_ARROW))
         self.pin.SetCursor(wx.StockCursor(wx.CURSOR_ARROW))
         self.controlPoints=[controlHead(self)]
+    def centrarTodo(self):
+        minp=[9999999,999999]
+        maxp=[0,0]
+        for p in self.head:
+            minp[0]=min(p[0],minp[0])
+            minp[1]=min(p[1],minp[1])
+            maxp[0]=max(p[0],maxp[0])
+            maxp[1]=max(p[1],maxp[1])
+        for s in self.strokes:
+            for p in s:
+                minp[0]=min(p[0],minp[0])
+                minp[1]=min(p[1],minp[1])
+                maxp[0]=max(p[0],maxp[0])
+                maxp[1]=max(p[1],maxp[1])
+        size=self.GetSize()
+        cm=[size[0]/2,size[1]/2]
+        pm=[(minp[0]+maxp[0])/2,(minp[1]+maxp[1])/2]
+        c=Centroid(self.head)
+        offset=[c[0]-pm[0],c[1]-pm[1]]
+        newp=[cm[0]+offset[0],cm[1]+offset[1]]
+        self.head=TranslateTo(self.head,newp)
+        for i in range(len(self.strokes)):
+            c=Centroid(self.strokes[i])
+            offset=[c[0]-pm[0],c[1]-pm[1]]
+            newp=[cm[0]+offset[0],cm[1]+offset[1]]
+            self.strokes[i]=TranslateTo(self.strokes[i],newp)
+    
+    def initEditPose(self,i):
+        self.ant=[self.head[:],self.strokes[:],self.lastsize[:]]
+        global main
+        animator=main.customs[0]
+        self.newPose()
+        ojos=animator.stack[i][0][0]
+        headp=animator.stack[i][1][0]
+
+        diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
+        r=diametro/2
+        
+        self.head=TranslateTo(self.head,headp)
+        self.strokes=animator.stack[i][2:][:]
+        self.centrarTodo()
+        self.hechoAction()
+        self.showFinishedPanel(True)
+        self.controlPoints[1].locations[0]=ojos[0]
+        self.controlPoints[1].locations[1]=ojos[1]
+        self.Refresh()
+    
     def leave(self,evt):
         self.clicked=False
         self.selectedCP=0
@@ -671,7 +926,7 @@ class DrawFrame(CustomPanel):
         self.Layout()
     def addFinishedPanel(self):        
         self.finishedsizer=wx.BoxSizer(wx.VERTICAL)
-        doneb=CustomButton(self,wx.Bitmap("doneL.gif"),self.insertPose,"terminar de editar")
+        doneb=CustomButton(self,wx.Bitmap("doneL.gif"),self.donePose,"terminar de editar")
         doneb.addHoldingImage(wx.Bitmap("done.gif"))
         self.finishedsizer.Add(doneb,flag=wx.ALIGN_RIGHT)
         insb=CustomButton(self,wx.Bitmap("insertL.gif"),self.insertPose,"insertar como pose principal")
@@ -682,11 +937,58 @@ class DrawFrame(CustomPanel):
         self.finishedsizer.Add(newb,flag=wx.ALIGN_RIGHT)
         self.sizer.Add(self.finishedsizer,proportion=1)
         self.sizer.Layout()
+    def donePose(self,evt):
+        self.newPose()
+        self.head=self.ant[0][:]
+        self.strokes=self.ant[1][:]
+        self.lastsize=self.ant[2][:]
+        self.ant=[]
+        global main
+        animator=main.customs[0]
+        animator.endEditPose()
+        self.hideFinishedPanel()
+        if len(self.strokes)==5:
+            self.hechoAction()
+        self.Refresh()
+    def getPose(self):
+        pose=[]
+        pose.append(np.array([Centroid(self.head)]))
+        for s in self.strokes:
+            pose.append(s[:])
+        return pose
+    
+    def standarPose(self):
+        diametro=Distance(self.head[0],self.head[int(len(self.head)/2)])
+        r=diametro/2
+        pose=self.getPose()
+        pose=self.unir(pose)
+        pose=TranslateTo(pose,[0,0])
+        for i in range(len(pose)):
+            pose[i][0]=pose[i][0]/r
+            pose[i][1]=pose[i][1]/r
+        return [np.array([self.controlPoints[1].locations])]+self.separar(pose)
+    def unir(self,strokes):
+        unidos=[]
+        for s in strokes:
+            unidos+=list(s)
+        return unidos
+    def separar(self,pose):
+        separados=[]
+        separados.append([pose[0]])
+        stroke=[]
+        for i in range(1,len(pose)):
+            stroke.append(pose[i])
+            if(len(stroke)==5):
+                separados.append(stroke)
+                stroke=[]
+        return separados      
+   
     def insertPose(self,evt):
-        global animator
+        global main
+        animator=main.customs[0]
         p=self.standarPose()
         animator.agregarPose(p)
-    def newPose(self,evt):
+    def newPose(self):
         s=self.GetClientSize()
         self.lastsize=[s[0],s[1]]
         self.head=TranslateTo(self.head,[s[0]*0.5,s[1]*0.25])
@@ -737,9 +1039,6 @@ class DrawFrame(CustomPanel):
         r=1.3*radOjos
         dc.DrawCircle(x+sep,y, r)
         dc.DrawCircle(x-sep,y, r)
-##        self.canvas.create_oval(x+sep/2-r, y-r, x+sep/2+r, y+r,outline="black", width=3)
-##        self.canvas.create_oval(x-sep/2-r, y-r, x-sep/2+r, y+r,outline="black", width=3)
-##    
     def numBrazos(self):
         num=0
         jointArms=self.strokes[0][1]
@@ -817,10 +1116,11 @@ class DrawFrame(CustomPanel):
         if self.selectedCP==0:
             return
         self.selectedCP.moveTo(evt.x,evt.y)
-##        if(len(self.ant)!=0):
-##            global animator
-##            p=self.standarPose()
-##            animator.refreshPose(p)
+        if(len(self.ant)!=0):
+            global main
+            animator=main.customs[0]
+            p=self.standarPose()
+            animator.refreshPose(p)
         self.Refresh()
     def selectRelease(self,evt):
         self.selectedCP=0  
@@ -1089,6 +1389,12 @@ def setFill(dc,color="red"):
     pen.SetWidth(1)
     dc.SetBrush(wx.Brush('red'))
     dc.SetPen(pen)
+def ask(parent,message, default_value=''):
+    dlg = wx.TextEntryDialog(parent, message, defaultValue=default_value)
+    dlg.ShowModal()
+    result = dlg.GetValue()
+    dlg.Destroy()
+    return result
 def PathLength(pts):
     d = 0
     primera=[]
@@ -1219,7 +1525,6 @@ class controlPoint(object):
     def drawCP(self,dc):
         p=self.draw.strokes[self.locations[0][0]][self.locations[0][1]]
         dc.DrawCircle(p[0],p[1], self.rad)
-##        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)
 class controlHead(controlPoint):
     def getPosition(self):
         return self.draw.head[int(len(self.draw.head)*0.75)]
@@ -1232,7 +1537,6 @@ class controlHead(controlPoint):
     def drawCP(self,dc):
         p=self.getPosition()
         dc.DrawCircle(p[0],p[1], self.rad)
-##        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)
 class controlEyes(controlPoint):
     def getPosition(self):
         c=Centroid(self.draw.head)
@@ -1252,9 +1556,6 @@ class controlEyes(controlPoint):
     def drawCP(self,dc):
         p=self.getPosition()
         dc.DrawCircle(p[0],p[1], self.rad)
-##        self.draw.canvas.create_oval(p[0]-self.rad/2,p[1]-self.rad/2,p[0]+self.rad/2,p[1]+self.rad/2,fill=self.color)  
-
-
 global main
 global primera
 global pen
