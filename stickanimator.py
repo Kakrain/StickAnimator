@@ -252,7 +252,6 @@ master.columnconfigure(1, weight=1)
 master.columnconfigure(2, weight=1)
 master.rowconfigure(0, weight=1)
 master.rowconfigure(1, weight=1)
-
 class CustomCanvas(Canvas):
     widthback=0
     heightback=0
@@ -649,18 +648,18 @@ class AnimationFrame(CustomFrame):
         i=self.hbar.get()[0]
         recorrido=i*self.maxTime/self.spc
         return recorrido+x
-    def drawStack(self):
-        ind=self.hbar.get()[0]
-        recorrido=ind*self.maxTime/self.spc
-        t=recorrido*self.spc
-        tf=t+(self.canvas.winfo_width()*self.spc)
-        f0=min(len(self.interpoled),int(t*self.fps))
-        ff=min(len(self.interpoled),int(tf*self.fps))
-        for i in range(f0,ff):
-            if i==self.pointer:
-                self.dibujarPose(i,self.stack[i],"blue")
-            else:
-                self.dibujarPose(i,self.stack[i])
+##    def drawStack(self):
+##        ind=self.hbar.get()[0]
+##        recorrido=ind*self.maxTime/self.spc
+##        t=recorrido*self.spc
+##        tf=t+(self.canvas.winfo_width()*self.spc)
+##        f0=min(len(self.interpoled),int(t*self.fps))
+##        ff=min(len(self.interpoled),int(tf*self.fps))
+##        for i in range(f0,ff):
+##            if i==self.pointer:
+##                self.dibujarPose(i,self.stack[i],"blue")
+##            else:
+##                self.dibujarPose(i,self.stack[i])
     def drawInterpoled(self):
         i=self.pointer
         if i>=0 and i<len(self.interpoled):
@@ -669,7 +668,7 @@ class AnimationFrame(CustomFrame):
         self.drawTimeline()
         self.drawAllTimeMarks()
         self.drawInterpoled()
-        self.drawStack()
+##        self.drawStack()
         if self.poseS!=-1:
             self.dibujarPose(self.pointer,self.stack[self.poseS],"red")
         self.drawPointer()
@@ -1030,6 +1029,7 @@ class DrawFrame(CustomFrame):
     newgif=0
     insertgif=0
     donegif=0
+
     def __init__(self,master):
         CustomFrame.__init__(self,master,"área de dibujo")
         self.grid(column=0,row=1,sticky=W+E+N+S)
@@ -1123,7 +1123,6 @@ class DrawFrame(CustomFrame):
         p=self.standarPose()
         animator.agregarPose(p)
     def newPose(self):
-##        self.head=getCircle(9*0.01,250)
         self.head=TranslateTo(self.head,[self.canvas.winfo_width()*0.5,self.canvas.winfo_height()*0.20])
         self.lastsize=[float(self.canvas.winfo_width()),float(self.canvas.winfo_height())]
         self.canvas.bind( "<B1-Motion>", paintDraw )
