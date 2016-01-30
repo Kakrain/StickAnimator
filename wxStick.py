@@ -1,6 +1,6 @@
 # -*- coding: cp1252 -*-
 import wx
-import sys,math
+import math
 from PIL import Image
 import numpy as np
 import wx.lib.scrolledpanel as scrolled
@@ -24,7 +24,7 @@ def centerWindow(win):
     win.SetPosition((x, y))
 def piltoimage(pil, alpha=True):
     if alpha:
-        image = apply( wx.EmptyImage, pil.size )
+        image = apply( wx.EmptyImage, pil.size)
         image.SetData( pil.convert("RGB").tobytes() )
         image.SetAlphaData(pil.convert("RGBA").tobytes()[3::4])
     else:
@@ -79,7 +79,7 @@ class CustomPanel(scrolled.ScrolledPanel):
         self.pin= wx.BitmapFromImage(piltoimage(Pimage))
         self.pin=CustomButton(self,self.pin,self.expand,"expand")
         self.topaint=[]
-
+        self.SetBackgroundColour(wx.WHITE)
         path = "pinO.png"
         Pimage = Image.open(path)
         Pimage = Pimage.resize((self.sizepin,self.sizepin), Image.ANTIALIAS)
@@ -93,7 +93,7 @@ class CustomPanel(scrolled.ScrolledPanel):
         self.title.Add(self.pin,flag=wx.ALIGN_LEFT)
         self.title.Add(self.label,flag=wx.ALIGN_LEFT)
 
-        self.sizer.Add(self.title,flag=wx.ALIGN_TOP,proportion=1)
+        self.sizer.Add(self.title,flag=wx.ALIGN_TOP|wx.EXPAND,proportion=1)
         self.SetSizer(self.sizer)
         self.Layout()
         self.font=wx.Font(14, wx.DEFAULT, wx.NORMAL, wx.NORMAL, False,u'MV Boli')
@@ -174,7 +174,7 @@ class MainWindow(wx.Frame):
         self.customs.append(AnimationFrame(self,self.bagSizer))
         self.customs.append(DrawFrame(self,self.bagSizer))
         self.customs.append(ReproductorFrame(self,self.bagSizer,self.customs[0]))
-        self.customs.append(CustomPanel(self,self.bagSizer,title="area del avatar",p=(1,2)))
+        self.customs.append(CustomPanel(self,self.bagSizer,title="área del avatar",p=(1,2)))
         self.bagSizer.AddGrowableRow(0)
         self.bagSizer.AddGrowableRow(1)
         self.bagSizer.AddGrowableCol(0)
@@ -265,6 +265,11 @@ class MainWindow(wx.Frame):
         filename.close()
     def Salir(self, e):
         self.Close()
+##    creditos a https://github.com/philwilliammee/wx_python_obj_viewer
+class AvatarFrame(CustomPanel):
+    def __init__(self,mainwindow,sizer,animframe):
+        CustomPanel.__init__(self,mainwindow,sizer,title="área de reproducción",p=(1,1))
+    
 class ReproductorFrame(CustomPanel):
     canvas=0
     reproduccion_toolbar=0
@@ -935,8 +940,8 @@ class DrawFrame(CustomPanel):
         newb=CustomButton(self,wx.Bitmap("newL.gif"),self.newPose,"nuevo sketch")
         newb.addHoldingImage(wx.Bitmap("new.gif"))
         self.finishedsizer.Add(newb,flag=wx.ALIGN_RIGHT)
-        self.sizer.Add(self.finishedsizer,proportion=1)
-        self.sizer.Layout()
+        self.title.Add(self.finishedsizer,proportion=1,flag=wx.ALIGN_RIGHT)
+        self.title.Layout()
     def donePose(self,evt):
         self.newPose()
         self.head=self.ant[0][:]
