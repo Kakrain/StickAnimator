@@ -3,9 +3,17 @@ import wx
 import math
 from PIL import Image
 import numpy as np
+from copy import deepcopy
 import wx.lib.scrolledpanel as scrolled
 import scipy.interpolate as si
 import time
+##import sys
+from OpenGL.arrays import vbo
+from wx import glcanvas
+from OpenGL.GL import *
+from OpenGL.GLUT import *
+from OpenGL.GLU import *
+from md5loader import MD5Model
 def bsplineAnt(d, K=3, N=100):
     K=min(len(d)-1,K)
     t = range(len(d))
@@ -50,8 +58,6 @@ class CustomButton(wx.StaticBitmap):
         self.SetBitmap(self.pressed)
     def leave(self,evt):
         self.SetBitmap(self.normal)
-        
-     
 class CustomPanel(scrolled.ScrolledPanel):
     bg=0
     pin=0
@@ -173,8 +179,10 @@ class MainWindow(wx.Frame):
         self.customs=[]
         self.customs.append(AnimationFrame(self,self.bagSizer))
         self.customs.append(DrawFrame(self,self.bagSizer))
-        self.customs.append(ReproductorFrame(self,self.bagSizer,self.customs[0]))
-        self.customs.append(CustomPanel(self,self.bagSizer,title="área del avatar",p=(1,2)))
+        avatarf=AvatarFrame(self,self.bagSizer)
+        self.customs.append(ReproductorFrame(self,self.bagSizer,self.customs[0],avatarf.avatarcanvas))
+        self.customs.append(avatarf)
+        
         self.bagSizer.AddGrowableRow(0)
         self.bagSizer.AddGrowableRow(1)
         self.bagSizer.AddGrowableCol(0)
@@ -222,6 +230,10 @@ class MainWindow(wx.Frame):
 
         timeitem=editionMenu.Append(wx.ID_ANY,"Cambiar el tiempo máximo", "cambia el tiempo máximo del área de animación")
         self.Bind(wx.EVT_MENU,self.configTime,timeitem)
+
+        flipitem=editionMenu.Append(wx.ID_ANY,"Girar 180%", "gira la pose seleccionada 180")
+        self.Bind(wx.EVT_MENU,anim.flipPose,flipitem)
+        
         
         self.accel_tbl = wx.AcceleratorTable([(wx.ACCEL_CTRL, ord('C'),copitem.GetId()),
                                               (wx.ACCEL_CTRL, ord('X'),coritem.GetId()),
@@ -230,9 +242,14 @@ class MainWindow(wx.Frame):
                                               (wx.ACCEL_CTRL, ord('R'),reitem.GetId()),
                                              ])
         self.SetAcceleratorTable(self.accel_tbl)
- 
+
+        avatarMenu = wx.Menu()
+        loadavataritem=avatarMenu.Append(wx.ID_ANY,"Importar","importa un avatar")
+        self.Bind(wx.EVT_MENU,self.customs[-1].avatarcanvas.OnOpen,loadavataritem)
+        
         menubar.Append(fileMenu, '&File')
         menubar.Append(editionMenu, '&Edición')
+        menubar.Append(avatarMenu, '&Avatar')
         self.SetMenuBar(menubar)
 
         self.Show(True)
@@ -267,13 +284,752 @@ class MainWindow(wx.Frame):
         self.Close()
 ##    creditos a https://github.com/philwilliammee/wx_python_obj_viewer
 class AvatarFrame(CustomPanel):
-    def __init__(self,mainwindow,sizer,animframe):
-        CustomPanel.__init__(self,mainwindow,sizer,title="área de reproducción",p=(1,1))
-    
+    avatarcanvas=0
+    def __init__(self,mainwindow,sizer):
+        CustomPanel.__init__(self,mainwindow,sizer,title="área del ávatar",p=(1,2))
+        self.avatarcanvas = AvatarCanvas(self)
+        self.SetMinSize((0, 0))
+        self.avatarcanvas.SetMinSize((200, 200))
+        self.sizer.Add(self.avatarcanvas, 0, wx.EXPAND|wx.ALIGN_TOP|wx.ALL, 0)
+        self.avatarcanvas.Bind(wx.EVT_KEY_DOWN, self.avatarcanvas.onKeyPress)
+        self.avatarcanvas.Bind(wx.EVT_LEFT_DOWN, self.avatarcanvas.OnMouseDown)
+        self.avatarcanvas.Bind(wx.EVT_LEFT_UP, self.avatarcanvas.OnMouseUp)
+        self.avatarcanvas.Bind(wx.EVT_MOTION, self.avatarcanvas.OnMouseMotion)
+        self.Bind(wx.EVT_MOUSEWHEEL,self.avatarcanvas.onMouseWheel)
+        self.avatarcanvas.Bind(wx.EVT_MOUSEWHEEL,self.avatarcanvas.onMouseWheel)
+
+
+                                
+        self.SetAutoLayout(True)
+        
+##         self.sizer.Add(self.title,flag=wx.ALIGN_TOP|wx.EXPAND,proportion=1)
+##        self.Bind(wx.EVT_PAINT, self.avatarcanvas.OnPaint)
+def toOldquad(quad):
+    x,y,z,w=quad
+    return [w,x,y,z]
+def toNewquad(quad):
+    w,x,y,z=quad
+    return [x,y,z,w]
+def dot(v1,v2):
+    r=0
+    for i in range(len(v1)):
+        r+=v1[i]*v2[i]
+    return r
+def sumV(v1,v2):
+    r=[]
+    for i in range(len(v1)):
+        r.append(v1[i]+v2[i])
+    return r
+def cross(a, b):
+    c = [a[1]*b[2] - a[2]*b[1],
+         a[2]*b[0] - a[0]*b[2],
+         a[0]*b[1] - a[1]*b[0]]
+    return c
+def mulS(v,s):
+    return [x*s for x in v]
+def restaV(v1,v2):
+    r=[]
+    for i in range(len(v1)):
+        r.append(v1[i]-v2[i])
+    return r
+def vectorQ(v,q):
+    u=[q[0], q[1], q[2]]
+    s = q[3]
+    return sumV(sumV(mulS(u,dot(u, v)*2.0),mulS(v,s*s-dot(u,u))),mulS(cross(u,v),2*s))
+
+def module(v):
+    r=0
+    for x in v:
+        r+=x**2
+    return math.sqrt(r)
+def normalize(v):
+    r=[]
+    m=module(v)
+    for x in v:
+        r.append(x/m)
+    return r
+def getAngles(point):
+    x,y,z=point
+    XsqPlusYsq = x**2 + y**2
+    r = math.sqrt(XsqPlusYsq + z**2)               # r
+    elev = math.atan2(z,math.sqrt(XsqPlusYsq))     # theta
+    az = math.atan2(y,x)                           # phi
+    return [elev, az]
+class MyCanvasBase(glcanvas.GLCanvas):
+    md5=0
+    def __init__(self, parent):
+        glcanvas.GLCanvas.__init__(self, parent, -1)
+        self.init = False
+        self.context = glcanvas.GLContext(self)
+       # initial mouse position
+        self.lastx = self.x = 30
+        self.lasty = self.y = 30
+        self.size = None
+        self.Bind(wx.EVT_ERASE_BACKGROUND, self.OnEraseBackground)
+        self.Bind(wx.EVT_SIZE, self.OnSize)
+        self.Bind(wx.EVT_PAINT, self.OnPaint)
+##        self.OnOpen(0)
+    def OnOpen(self, event):
+        "Open an Obj file, set title if successful"
+        # Create a file-open dialog in the current directory
+        filters = 'md5 files (*.md5mesh)|*.md5mesh'
+        dlg = wx.FileDialog(self, message="Open an Image...", defaultDir=os.getcwd()+"\objects", 
+                            defaultFile="", wildcard=filters, style=wx.OPEN)
+        if dlg.ShowModal() == wx.ID_OK:
+            filename = dlg.GetPath()
+            self.load_md5(filename)
+        dlg.Destroy() # we don't need the dialog any more so we ask it to clean-up
+    def load_md5(self,filename):  
+        self.md5 = MD5Model()
+        self.md5.LoadModel(filename)
+        self.md5.setMaxSize(10)#(2.5)
+        self.skelman=skeletonManager(self.md5.m_Animation.getBlankSkeleton(),self)
+        self.md5.m_Animation.setSkeleton(self.skelman.skeleton)
+        self.Refresh(True)
+    def OnEraseBackground(self, event):
+        pass # Do nothing, to avoid flashing on MSW.
+    def OnSize(self, event):
+        wx.CallAfter(self.DoSetViewport)
+##        self.Layout()
+##        self.Refresh()
+        event.Skip()
+
+    def DoSetViewport(self):
+        size = self.size = self.GetClientSize()
+        self.SetCurrent(self.context)
+        glViewport(0, 0, size.width, size.height)
+        
+    def OnPaint(self, event):
+        dc = wx.PaintDC(self)
+        self.SetCurrent(self.context)
+        if not self.init:
+            self.InitGL()
+            self.init = True
+        self.OnDraw()
+class skeletonManager():
+    original=0
+    skeleton=0
+    bag=[]
+    animcanvas=0
+    def applyPose(self,pose):
+        head=pose[0]
+        newpose=[]
+        finalpose=[]
+        for i in range(1,len(pose)):
+            newpose.append(toSpline(pose[i]))
+        for l in range(len(self.bag)):
+            limb=self.bag[l]
+            tot=self.getTotal(limb)
+            part=[]
+            part.append(newpose[l][0])
+            p=0
+            for i in range(1,len(limb)-1):
+                jant=self.skeleton.m_Joints[limb[i-1]]
+                joint=self.skeleton.m_Joints[limb[i]]
+                p+=Distance(jant.m_Pos,joint.m_Pos)/tot
+                print int(p*len(newpose[l]))
+                part.append(newpose[l][int(p*len(newpose[l]))])
+            part.append(newpose[l][-1])
+            finalpose.append(part)
+            self.animcanvas.pose=finalpose
+        for i in range(len(self.bag)):
+            limb=self.bag[i]
+            part=finalpose[i]
+##            for j in range(1,2):
+            for j in range(1,len(limb)):
+                old=restaV(self.skeleton.m_Joints[limb[j]].m_Pos,self.skeleton.m_Joints[limb[j-1]].m_Pos)
+                newv=restaV(part[j],part[j-1])                
+                anglesold=getAngles(old)
+                anglesnew=getAngles(newv)
+##                anglesold=[self.arreglarAngle(anglesold[0]),self.arreglarAngle(anglesold[1])]
+##                anglesnew=[self.arreglarAngle(anglesnew[0]),self.arreglarAngle(anglesnew[1])]
+                anglesdelta=restaV(anglesnew,anglesold)#theta phi
+##                anglesdelta=[self.arreglarAngle(anglesdelta[0]),self.arreglarAngle(anglesdelta[1])]
+                
+                theta=anglesdelta[0]
+                phi=anglesdelta[1]
+                self.animcanvas.rotateXLocal(limb[j],theta)
+                self.animcanvas.rotateZGlobal(limb[j],phi)
+##                self.animcanvas.rotateXLocal(limb[j],-theta,False)
+##                self.animcanvas.rotateZGlobal(limb[j],phi,False)
+    def getAngle(self,a,b):
+        print "vector dimensiones: "+str(a)
+        return math.acos(dot(a,b)/(module(a)*module(b)))
+    def arreglarAngle(self,angle):
+        r=abs(angle)
+        r=r%(2*math.pi)
+        if angle<0:
+            r=-r
+        return r
+    def reset(self):
+        self.skeleton=deepcopy(self.original)
+    def getTotal(self,group):
+        tot=0
+        jant=self.skeleton.m_Joints[group[0]]
+        for i in range(1,len(group)):
+            jant=self.skeleton.m_Joints[group[i-1]]
+            joint=self.skeleton.m_Joints[group[i]]
+            index=group[i]
+            tot+=Distance(jant.m_Pos,joint.m_Pos)
+        return tot
+    def __init__(self,sk,animcanvas): 
+        self.original=sk
+        self.skeleton=deepcopy(self.original)
+        self.animcanvas=animcanvas
+        group=[]
+        n=-1
+        ##torso,"L.arm","R.arm","L.leg","R.Leg"
+        for i in reversed(range(len(self.skeleton.m_Joints))):
+            joint=self.skeleton.m_Joints[i]
+            if n==-1:
+                n=joint.m_ParentID
+            if(joint.m_ParentID==n):
+                n-=1
+                group.append(i)
+            else:
+                group.append(i)
+                self.bag.append(group)
+                group=[]
+                n=-1
+        self.bag=list(reversed(sorted(self.bag,key=len)))
+        self.bag=self.bag[:5]
+        self.ordenarBag()
+    def getXGroup(self,group):
+        X=0
+        for i in group:
+            joint=self.skeleton.m_Joints[i]
+            X+=joint.m_Pos[0]
+        X/=len(group)
+        return X
+    def getZGroup(self,group):
+        Z=0
+        for i in group:
+            joint=self.skeleton.m_Joints[i]
+            Z+=joint.m_Pos[2]
+        Z/=len(group)
+        return Z
+    def ordenarPierna(self,group):
+        pI=self.skeleton.m_Joints[group[0]].m_Pos
+        pF=self.skeleton.m_Joints[group[-1]].m_Pos
+        if pF[2]>pI[2]:
+            return list(reversed(group))
+        return group
+    def ordenarBrazoDer(self,group):
+        pI=self.skeleton.m_Joints[group[0]].m_Pos
+        pF=self.skeleton.m_Joints[group[-1]].m_Pos
+        if pF[0]>pI[0]:
+            return list(reversed(group))
+        return group
+    def ordenarBrazoIzq(self,group):
+        pI=self.skeleton.m_Joints[group[0]].m_Pos
+        pF=self.skeleton.m_Joints[group[-1]].m_Pos
+        if pF[0]<pI[0]:
+            return list(reversed(group))
+        return group
+    def ordenarBag(self):
+        self.bag=sorted(self.bag,key=self.getXGroup)
+        torso=self.ordenarPierna(self.bag.pop(2))
+        self.bag=list(reversed(sorted(self.bag,key=self.getZGroup)))
+        brazos=list(reversed(sorted([self.bag.pop(0),self.bag.pop(0)],key=self.getXGroup)))
+        brazos=[self.ordenarBrazoIzq(brazos[0]),self.ordenarBrazoDer(brazos[1])]
+        minlen=min(len(brazos[0]),len(brazos[1]))
+        for i in range(len(brazos)):
+            if len(brazos[i])>minlen:
+               brazos[i]=brazos[i][:minlen]
+        piernas=list(reversed(sorted([self.bag.pop(0),self.bag.pop(0)],key=self.getXGroup)))
+        piernas=[self.ordenarPierna(piernas[0]),self.ordenarPierna(piernas[1])]
+        minlen=min(len(piernas[0]),len(piernas[1]))
+        for i in range(len(piernas)):
+            if len(piernas[i])>minlen:
+               piernas[i]=piernas[i][:minlen]
+        self.bag=[torso]+brazos+piernas
+    def getNJoints(self,i):
+        n=0
+        if self.skeleton.m_Joints[i].m_ParentID>=0:
+            n+=1
+        for joint in self.skeleton.m_Joints:
+            if joint.m_ParentID==i:
+                n+=1
+        return n   
+    def render(self):
+        glPointSize(5.0)
+        glPushAttrib(GL_ENABLE_BIT)
+        glDisable(GL_LIGHTING)
+        glDisable(GL_DEPTH_TEST)
+        glBegin(GL_POINTS)
+        for group in self.bag:
+            glColor3f(0.0,1.0,0.0)
+            for i in group:
+                p=self.skeleton.m_Joints[i].m_Pos
+                glVertex3fv(p)
+                glColor3f(1.0,1.0,0.0)
+        glEnd()
+        glColor3f(1.0,0.0,1.0)
+        for group in self.bag:
+            glBegin(GL_LINES)
+            for n in range(1,len(group)):
+                iant=group[n-1]
+                i=group[n]
+                pant=self.skeleton.m_Joints[iant].m_Pos       
+                p=self.skeleton.m_Joints[i].m_Pos       
+                glVertex3fv(pant)
+                glVertex3fv(p)
+            glEnd()
+        glPopAttrib()
+       
+class Quaternion:
+    """Quaternions for 3D rotations"""
+    def __init__(self, x):
+##        array=toOldquad(x)
+        array=x
+        self.x = np.asarray(array, dtype=float)
+        
+    @classmethod
+    def from_v_theta(cls, v, theta):
+        """
+        Construct quaternion from unit vector v and rotation angle theta
+        """
+        theta = np.asarray(theta)
+        v = np.asarray(v)
+        
+        s = np.sin(0.5 * theta)
+        c = np.cos(0.5 * theta)
+        vnrm = np.sqrt(np.sum(v * v))
+
+        q = np.concatenate([[c], s * v / vnrm])
+        return cls(q)
+
+    def __repr__(self):
+        return "Quaternion:\n" + self.x.__repr__()
+
+    def __mul__(self, other):
+        # multiplication of two quaternions.
+        prod = self.x[:, None] * other.x
+
+        return self.__class__([(prod[0, 0] - prod[1, 1]
+                                 - prod[2, 2] - prod[3, 3]),
+                                (prod[0, 1] + prod[1, 0]
+                                 + prod[2, 3] - prod[3, 2]),
+                                (prod[0, 2] - prod[1, 3]
+                                 + prod[2, 0] + prod[3, 1]),
+                                (prod[0, 3] + prod[1, 2]
+                                 - prod[2, 1] + prod[3, 0])])
+    def get(self):
+        return self.x
+##        return toNewquad(self.x)
+    def as_v_theta(self):
+        """Return the v, theta equivalent of the (normalized) quaternion"""
+        # compute theta
+        norm = np.sqrt((self.x ** 2).sum(0))
+        theta = 2 * np.arccos(self.x[0] / norm)
+
+        # compute the unit vector
+        v = np.array(self.x[1:], order='F', copy=True)
+        v /= np.sqrt(np.sum(v ** 2, 0))
+
+        return v, theta
+
+    def as_rotation_matrix(self):
+        """Return the rotation matrix of the (normalized) quaternion"""
+        v, theta = self.as_v_theta()
+        c = np.cos(theta)
+        s = np.sin(theta)
+
+        return np.array([[v[0] * v[0] * (1. - c) + c,
+                          v[0] * v[1] * (1. - c) - v[2] * s,
+                          v[0] * v[2] * (1. - c) + v[1] * s],
+                         [v[1] * v[0] * (1. - c) + v[2] * s,
+                          v[1] * v[1] * (1. - c) + c,
+                          v[1] * v[2] * (1. - c) - v[0] * s],
+                         [v[2] * v[0] * (1. - c) - v[1] * s,
+                          v[2] * v[1] * (1. - c) + v[0] * s,
+                          v[2] * v[2] * (1. - c) + c]])
+class AvatarCanvas(MyCanvasBase):
+    start=0.0
+    swapYZ=False
+    cam=[-0.13,0.1,-15]
+    Z=15
+    theta=-1.5
+    h=0.1
+    index=-1
+    running=True
+    playing=True
+    rad=25
+    skelman=0
+    mainwindow=0
+    pos=0
+    span=0
+    sizer=0
+    ##torso,"L.arm","R.arm","L.leg","R.Leg"
+    proportions=[0.58,0.67,0.67,0.89,0.89]
+    pose=[[[-0.062586196541664599, 0.0083448262055552808]],[[0.50217307252948995, -53.70030115436375]],[[6.9822420838406742, -29.864591400626473], [3.5848116289431329, -14.21544552417148], [-1.7883696494631791, 1.3888982553144464], [-2.8211599318117853, 13.486833288643087], [-7.3698973765643085, 21.741266098382379]],[[3.5848116289431329, -14.21544552417148], [-10.920154754132934, -13.600283631242602], [-25.165994022786478, -14.528792841911692], [-30.556789353210313, -21.678236118078363], [-35.94758468363414, -28.8276793942083]],[[3.5848116289431329, -14.21544552417148], [20.83887587095586, -10.95813579377168], [29.282463900558454, -13.735846155533276], [32.980049747824118, -22.75359290906103], [36.677635595097939, -31.771339662648483]],[[-7.3698973765643085, 21.741266098382379], [-26.492772863860385, 15.557608900289434], [-39.962281142837632, 14.437756992157638], [-38.070846902582325, 23.983598857181658], [-29.46410178315303, 40.356050380783365]],[[-7.3698973765643085, 21.741266098382379], [13.010622742751474, 19.936698862559034], [33.025476862566137, 19.571799423555508], [37.423749772210719, 29.897963933974847], [41.822022681923151, 40.224128444410411]]]
+    def arreglarPose(self,pose):
+        pose=self.arreglarHead(pose)
+        pose=self.invertPose(pose)
+        pose=self.poseto3D(pose)
+        return pose
+    def poseto3D(self,pose):
+        diametro=self.rad
+        length=diametro*2.4
+        lens=[self.rad]
+        for prop in self.proportions:
+            p=prop*length
+            lens.append(p/5)
+        for i in range(len(pose)):
+            part=pose[i]
+            part[0]=[part[0][0],0,part[0][1]]
+            for j in range(1,len(part)):
+                foco=False
+                if i==0 or j>2:
+                    foco=True
+                delta=self.pointTo3D(restaV(part[j],[part[j-1][0],part[j-1][2]]),lens[i],foco)
+                part[j]=sumV(part[j-1],delta)
+        for i in range(4,len(pose)):
+            part=pose[i]
+            for p in part:
+                p[1]*=-1
+        for i in range(4,6):
+            part=pose[i]
+            for p in part:
+                p[1]+=pose[1][-1][1]
+        for i in range(2,4):
+            part=pose[i]
+            for p in part:
+                p[1]+=pose[1][1][1]
+        return pose
+    def pointTo3D(self,point,p,negative=False):
+        x=point[0]
+        z=point[1]
+        y=math.sqrt(abs(p*p-x*x-z*z))
+        if negative:
+            y*=-1
+        newpoint=[x,y,z]
+        return newpoint
+    def arreglarHead(self,pose):
+        c=pose[1][0]
+        ojos=pose[0][0]
+        x=c[0]+ojos[0]*self.rad
+        y=c[1]+ojos[1]*self.rad
+        pose[0][0][0]=x
+        pose[0][0][1]=y
+        p=[]
+        p.append(pose[0][0][:])
+        p.append(pose[1][0][:])
+        pose=pose[2:]
+        pose=[p]+pose
+        return pose
+    def invertPose(self,pose):
+        for i in range(len(pose)):
+            for j in range(len(pose[i])):
+                for k in range(len(pose[i][j])):
+                    pose[i][j][k]*=-1
+        return pose
+    def renderPose(self):
+        if len(self.pose)==0:
+            return
+        k=0.1
+        glPointSize(5.0)
+        glPushAttrib(GL_ENABLE_BIT)
+        glDisable(GL_LIGHTING)
+        glDisable(GL_DEPTH_TEST)
+        glBegin(GL_POINTS)
+        for part in self.pose:
+            glColor3f(1.0,1.0,0.0)
+            for p in part:
+                glVertex3fv([p[0]*k,p[1]*k,p[2]*k])
+                glColor3f(0.0,1.0,1.0)
+        
+        glEnd()
+        glColor3f(0.0,0.0,1.0)
+        glBegin(GL_LINES)
+        for part in self.pose:
+            if len(part)>1:
+                for i in range(1,len(part)):
+                    pI=[part[i-1][0]*k,part[i-1][1]*k,part[i-1][2]*k]
+                    pF=[part[i][0]*k,part[i][1]*k,part[i][2]*k]
+                    glVertex3fv(pI)
+                    glVertex3fv(pF)
+        glEnd()
+        glPopAttrib()
+    def renderQuaternions(self):
+        if len(self.quaternions)==0:
+            return
+        glPointSize(5.0)
+        glPushAttrib(GL_ENABLE_BIT)
+        glDisable(GL_LIGHTING)
+        glDisable(GL_DEPTH_TEST)
+        glColor3f(1.0,1.0,0.0)
+        glBegin(GL_POINTS)
+        for par in self.quaternions:
+            glVertex3fv(par[0])
+            glVertex3fv(par[1])
+        glEnd()
+        glColor3f(0.0,0.0,1.0)
+        glBegin(GL_LINES)
+        for par in self.quaternions:
+            glVertex3fv(par[0])
+            glVertex3fv(par[1])
+        glEnd()
+        glPopAttrib()
+    def getQuaternions(self):
+        quat=[]
+        for j0 in self.skelman.skeleton.m_Joints:
+            par=[]
+            z=[1,0,0]
+            quad=Quaternion(j0.m_Orient)
+            deltapoint=vectorQ(z,quad.get())
+##            deltapoint=quad.as_v_theta()[0]
+            par.append(j0.m_Pos)
+            par.append(sumV(j0.m_Pos,deltapoint))
+            quat.append(par)
+        return quat
+    def rotatequats(self,skeleton):
+        sk=skeleton.copy()
+        joint=sk.m_Joints[7]
+        quad=Quaternion(joint.m_Orient)
+        axisrot=self.rotationvec[:]
+##        axisrot=vectorQ(axisrot,quad.get())
+        rotmin=Quaternion.from_v_theta(axisrot,1)      
+        sk.m_Joints[7].m_Orient=(rotmin*quad).get()
+        return sk
+    def rotateXLocal(self,i,angle,follow=True):
+##        self.pivotJoint(i,[1,0,0],angle,[1,0,0],follow)
+        self.pivotJointLocal(i,[0,0,1],angle,[1,0,0],follow)
+    def rotateYLocal(self,i,angle,follow=True):
+##        self.pivotJoint(i,[0,1,0],angle,[0,1,0],follow)
+        self.pivotJointLocal(i,[0,1,0],angle,[0,-1,0],follow)
+    def rotateZLocal(self,i,angle,follow=True):
+##        self.pivotJointGlobal(i,[0,0,1],angle,[-1,0,0],follow)
+        self.pivotJointLocal(i,[1,0,0],angle,[0,0,1],follow)
+    def pivotJointLocal(self,i,axis,angle,axisrot,follow=True):
+        self.moveJointLocal(i,axis,angle,follow)
+        self.rotateJointLocal(i,axisrot,angle)
+    def moveJointLocal(self,i,axis,angle,follow=True):
+        animatedJoint=self.skelman.skeleton.m_Joints[i]
+        assert(animatedJoint.m_ParentID>=0)
+        oldrot=animatedJoint.m_Orient[:]
+        oldpos=animatedJoint.m_Pos[:]
+        parentJoint = self.skelman.skeleton.m_Joints[animatedJoint.m_ParentID]
+        parentpoint=parentJoint.m_Pos
+        finalpoint=animatedJoint.m_Pos
+        quad=Quaternion(animatedJoint.m_Orient)
+        axisant=axis[:]
+        axis=vectorQ(axis,quad.get())
+        deltapoint=restaV(finalpoint,parentpoint)
+        rot = Quaternion.from_v_theta(axis,angle)
+        deltapoint=vectorQ(deltapoint,toNewquad(rot.get()))
+        animatedJoint.m_Pos=sumV(parentpoint,deltapoint)
+        self.followPosition(i,oldpos)
+        if follow: 
+            for j in range(len(self.skelman.skeleton.m_Joints)): 
+                joint=self.skelman.skeleton.m_Joints[j]
+                if joint.m_ParentID==i:
+                    self.moveJointGlobal(j,axis,angle)
+                    self.rotateJointGlobal(j,axisant,angle)           
+    def rotateJointLocal(self,i,axisrot,angle):
+        animatedJoint=self.skelman.skeleton.m_Joints[i] 
+        quad=Quaternion(animatedJoint.m_Orient)
+        rotmin=Quaternion.from_v_theta(axisrot,-angle)
+        animatedJoint.m_Orient=(rotmin*quad).get()
+
+##        for j in range(len(self.displayskel.m_Joints)): 
+##            joint=self.displayskel.m_Joints[j]
+##            if joint.m_ParentID==i:
+##                self.rotateJointGlobal(j,axisrot,angle)
+        
+    def rotateXGlobal(self,i,angle,follow=True):
+##        self.pivotJoint(i,[1,0,0],angle,[1,0,0],follow)
+        self.pivotJointGlobal(i,[1,0,0],angle,[0,0,1],follow)
+    def rotateYGlobal(self,i,angle,follow=True):
+##        self.pivotJoint(i,[0,1,0],angle,[0,1,0],follow)
+        self.pivotJointGlobal(i,[0,1,0],angle,[0,1,0],follow)
+    def rotateZGlobal(self,i,angle,follow=True):
+##        self.pivotJoint(i,[0,0,1],angle,[0,0,1],follow)
+        self.pivotJointGlobal(i,[0,0,1],angle,[-1,0,0],follow)
+    def pivotJointGlobal(self,i,axis,angle,axisrot,follow=True):
+        self.moveJointGlobal(i,axis,angle,follow)
+        self.rotateJointGlobal(i,axisrot,angle,follow)
+    def moveJointGlobal(self,i,axis,angle,follow=True):
+        animatedJoint=self.skelman.skeleton.m_Joints[i]
+        assert(animatedJoint.m_ParentID>=0)
+        oldrot=animatedJoint.m_Orient[:]
+        oldpos=animatedJoint.m_Pos[:]
+        parentJoint = self.skelman.skeleton.m_Joints[animatedJoint.m_ParentID]
+        parentpoint=parentJoint.m_Pos
+        finalpoint=animatedJoint.m_Pos
+        quad=Quaternion(animatedJoint.m_Orient)
+        deltapoint=restaV(finalpoint,parentpoint)
+        rot = Quaternion.from_v_theta(axis,angle)
+        deltapoint=vectorQ(deltapoint,toNewquad(rot.get()))
+        animatedJoint.m_Pos=sumV(parentpoint,deltapoint)
+        self.followPosition(i,oldpos)
+        if follow:
+            for j in range(len(self.skelman.skeleton.m_Joints)): 
+                joint=self.skelman.skeleton.m_Joints[j]
+                if joint.m_ParentID==i:
+                    self.moveJointGlobal(j,axis,angle)        
+    def rotateJointGlobal(self,i,axisrot,angle,follow=True):
+        animatedJoint=self.skelman.skeleton.m_Joints[i] 
+        quad=Quaternion(animatedJoint.m_Orient)
+        rotmin=Quaternion.from_v_theta(axisrot,-angle)
+        animatedJoint.m_Orient=(quad*rotmin).get()
+        if follow:   
+            for j in range(len(self.skelman.skeleton.m_Joints)):
+                joint=self.skelman.skeleton.m_Joints[j]
+                if joint.m_ParentID==i:
+                    self.rotateJointGlobal(j,axisrot,angle)
+
+    def followOrient(self,i,rotmin):
+        for j in range(len(self.skelman.skeleton.m_Joints)):
+            joint=self.skelman.skeleton.m_Joints[j]
+            if joint.m_ParentID==i:
+                quad=Quaternion(joint.m_Orient)
+                joint.m_Orient=(rotmin*quad).get()
+                self.followOrient(j,rotmin)          
+    def followPosition(self,i,oldpos):
+        for j in range(len(self.skelman.skeleton.m_Joints)):
+            joint=self.skelman.skeleton.m_Joints[j]
+            if joint.m_ParentID==i:
+                newold=joint.m_Pos[:]
+                olddelta=restaV(joint.m_Pos,oldpos)
+                joint.m_Pos=sumV(self.skelman.skeleton.m_Joints[i].m_Pos,olddelta)
+                self.followPosition(j,newold)
+    def setPose(self,pose):
+        if self.skelman!=0:
+            self.skelman.reset()
+            self.skelman.applyPose(self.arreglarPose(deepcopy(pose)))
+            self.md5.m_Animation.setSkeleton(self.skelman.skeleton)
+            self.refreshCam()
+    def resetPose(self):
+        if self.skelman!=0:
+            self.skelman.reset()
+##            self.displayskel=self.md5.m_Animation.getBlankSkeleton()
+##            self.skelman.skeleton=self.displayskel
+            self.md5.m_Animation.setSkeleton(self.skelman.skeleton)
+            self.refreshCam()
+    def onKeyPress(self, event):
+        keycode = event.GetKeyCode()
+        inc=0.1
+        print keycode
+##        if keycode == 308:
+##            self.skelman.applyPose(self.pose)
+##            self.md5.m_Animation.setSkeleton(self.displayskel)   
+        if keycode == 81:#q
+            self.Z+=inc
+        if keycode == 69:#e
+            self.Z-=inc
+        if keycode == 87:#up
+            self.h+=inc*2
+        if keycode == 83:#down
+            self.h-=inc*2
+        if keycode == 68:
+            self.theta-=inc/2#left
+        if keycode == 65:
+            self.theta+=inc/2#right
+##credit    https://jakevdp.github.io/blog/2012/11/24/simple-3d-visualization-in-matplotlib/
+##        if keycode == 88:
+####            self.rotateXGlobal(9,math.pi/10)#9,7,15,25
+##            self.rotateXLocal(25,math.pi/10,False)#9,7,15
+##            self.md5.m_Animation.setSkeleton(self.displayskel)
+##        if keycode == 89:
+####            self.rotateYGlobal(9,math.pi/10)
+##            self.rotateYLocal(25,math.pi/10,False)
+##            self.md5.m_Animation.setSkeleton(self.displayskel)
+##        if keycode == 90:
+####            self.rotateZGlobal(9,math.pi/10)
+##            self.rotateZLocal(25,math.pi/10,False)
+##            self.md5.m_Animation.setSkeleton(self.displayskel)
+##        if keycode == wx.WXK_SPACE:
+##            print "blank skeleton"
+##            self.displayskel=self.md5.m_Animation.getBlankSkeleton()
+##            self.skelman=skeletonManager(self.displayskel,self)
+##            print self.displayskel
+##            self.md5.m_Animation.setSkeleton(self.displayskel)     
+##        self.md5.setQuatVisible(self.getQuaternions())
+        
+##            self.index+=1
+##            self.index=self.index%len(self.md5.m_Animation.m_Skeletons)
+##            print self.index
+##            self.md5.m_Animation.setSkeleton(self.md5.m_Animation.m_Skeletons[self.index])
+        self.refreshCam()
+    def refreshCam(self):
+        self.Z=max(self.Z,0)
+        self.h=max(-(self.Z-0.0001),self.h)
+        self.h=min(self.Z-0.0001,self.h)
+        c=math.sqrt(max((self.Z**2)-(self.h**2),0))
+        x=c*math.cos(self.theta)
+        z=c*math.sin(self.theta)
+        self.cam=[x,self.h,z]
+        self.Refresh(True)
+    def OnMouseDown(self, evt):
+        self.x, self.y = self.lastx, self.lasty = evt.GetPosition()
+    def OnMouseUp(self, evt):
+        pass
+    def onMouseWheel(self,evt):
+        print "wheel"
+        inc=1.0
+        if evt.GetWheelRotation()>0:
+            self.Z-=inc
+        else:
+            self.Z+=inc
+        self.refreshCam()
+    def OnMouseMotion(self, evt):
+        if evt.Dragging() and evt.LeftIsDown():
+            self.lastx, self.lasty = self.x, self.y
+            self.x, self.y = evt.GetPosition()
+            xScale = 0.01
+            yScale = 0.1
+            self.theta-=(self.x - self.lastx) * xScale
+            self.h+=(self.y - self.lasty)* yScale
+            self.refreshCam()
+    def InitGL(self):
+        self.pose=self.arreglarPose(self.pose)
+        self.swapYZ=True
+##        self.Bind(wx.EVT_KEY_DOWN, self.onKeyPress)
+##        self.Bind(wx.EVT_LEFT_DOWN, self.OnMouseDown)
+##        self.Bind(wx.EVT_LEFT_UP, self.OnMouseUp)
+##        self.Bind(wx.EVT_MOTION, self.OnMouseMotion)
+##        self.Bind(wx.EVT_MOUSEWHEEL,self.onMouseWheel)
+        glMatrixMode(GL_PROJECTION)
+        glFrustum(-0.5, 0.5, -0.5, 0.5, 1.0, 20.0)
+        glMatrixMode(GL_MODELVIEW)
+        self.adj_amb_light(10.0)
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_LIGHTING)
+        glEnable(GL_LIGHT0)
+    def OnDraw(self):
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glClearColor(1,1,1,1)
+        glLoadIdentity()
+        if self.swapYZ:
+            gluLookAt(self.cam[0],self.cam[2],self.cam[1],0,0,0,0,0,1.0)
+        else:
+            gluLookAt(self.cam[0],self.cam[1],self.cam[2],0,0,0,0,1.0,0)
+        if self.md5!=0:
+            self.md5.Render()
+##        if self.skelman!=0:
+##            self.skelman.render()
+        if self.size is None:
+            self.size = self.GetClientSize()
+##        self.renderPose()
+        self.SwapBuffers()
+        
+    def adj_amb_light(self,v):
+        glLightfv(GL_LIGHT0, GL_AMBIENT,  [v,v,v])
+        self.Refresh(True)    
+    def adj_light_pos(self,v):
+##        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+##        glLoadIdentity()
+        glLightfv(GL_LIGHT0, GL_POSITION, (3, 3,-v))
+        self.Refresh(True)
+    def adj_dif_light(self,v):
+        glLightfv(GL_LIGHT0, GL_DIFFUSE,  [v,v,v])
+        self.Refresh(True)    
 class ReproductorFrame(CustomPanel):
     canvas=0
     reproduccion_toolbar=0
     animframe=0
+    avatarcanvas=0
     play_pause=0
     stop_button=0
     playgif=0
@@ -284,7 +1040,7 @@ class ReproductorFrame(CustomPanel):
     playing=0
     globaltime=0
     start=0
-    def __init__(self,mainwindow,sizer,animframe):
+    def __init__(self,mainwindow,sizer,animframe,avatarcanvas):
         CustomPanel.__init__(self,mainwindow,sizer,title="área de reproducción",p=(1,1))
         self.reproduccion_toolbar=wx.BoxSizer(wx.HORIZONTAL)
         self.stop_button=CustomButton(self,wx.Bitmap("stopL.gif"),self.stop,"detener la animación")
@@ -293,6 +1049,7 @@ class ReproductorFrame(CustomPanel):
         self.play_pause.addHoldingImage(wx.Bitmap("play.gif"))
         self.progress = wx.Gauge(self)
         self.animframe=animframe
+        self.avatarcanvas=avatarcanvas
         self.reproduccion_toolbar.Add(self.stop_button,flag=wx.ALIGN_LEFT|wx.LEFT)
         self.reproduccion_toolbar.Add(self.play_pause,flag=wx.ALIGN_LEFT|wx.LEFT)
         self.reproduccion_toolbar.Add(self.progress,proportion=1)
@@ -307,7 +1064,9 @@ class ReproductorFrame(CustomPanel):
         if self.playing:
             if self.animframe.timepos<len(self.animframe.interpoled):
                 self.dibujarPose(self.animframe.interpoled[self.animframe.timepos],dc)
+                self.avatarcanvas.setPose(self.animframe.interpoled[self.animframe.timepos])
             else:
+                self.avatarcanvas.resetPose()
                 self.animframe.timepos=0
                 self.pause(0)
     def startTimer(self):
@@ -465,7 +1224,17 @@ class AnimationFrame(CustomPanel):
             if wx.MessageDialog(self, "Seguro que quieres eliminar esta pose?","Eliminar pose", wx.YES_NO | wx.ICON_QUESTION).ShowModal() == wx.ID_YES:
                 self.stack[self.timepos]=[]
         self.do()
-        self.generatePoses()    
+        self.generatePoses()
+    def flipPose(self,evt=0):
+        if(self.timepos!=0 and self.timepos<len(self.stack) and len(self.stack[self.timepos])!=0):
+            temp=self.stack[self.timepos][3][:]
+            self.stack[self.timepos][3]=self.stack[self.timepos][4][:]
+            self.stack[self.timepos][4]=temp
+            temp=self.stack[self.timepos][5][:]
+            self.stack[self.timepos][5]=self.stack[self.timepos][6][:]
+            self.stack[self.timepos][6]=temp
+        self.do()
+        self.generatePoses()
     def fitStack(self):
         n=0
         for i in range(1,len(self.stack)):
@@ -513,7 +1282,6 @@ class AnimationFrame(CustomPanel):
             s+="#"
         s=s[:-1]
         return s
-    
     def interpolateStack(self):
         if len(self.stack)<=1:
             self.interpoled=self.stack[:]
@@ -640,7 +1408,6 @@ class AnimationFrame(CustomPanel):
                 newpose.append(point)
                 point=[]
         return newpose
-        
     def setLine(self,length):
         self.line.Destroy()
         length+=30
@@ -656,6 +1423,7 @@ class AnimationFrame(CustomPanel):
         if(i<len(self.stack) and i!=0):
             self.poseS=i
         self.Refresh()
+        
     def moveTime(self,evt):
         i=self.getStackPos(self.recalculateCanvas(evt.x))
         self.pointer=i
@@ -695,7 +1463,6 @@ class AnimationFrame(CustomPanel):
                 s.append(p)
             pose.append(s)
         return pose
-    
     def releaseTime(self,evt):
         if self.poseS==-1:
             return
@@ -711,7 +1478,6 @@ class AnimationFrame(CustomPanel):
             self.stack[self.poseS]=self.stack[self.pointer]
             self.stack[self.pointer]=temp
             self.fitStack()
-        
         self.poseS=-1
         self.do()
         self.generatePoses()
@@ -747,8 +1513,7 @@ class AnimationFrame(CustomPanel):
                 self.dibujarPose(i,self.stack[i],dc)
             else:
                 setPluma(dc,"black")
-                self.dibujarPose(i,self.stack[i],dc)
-        
+                self.dibujarPose(i,self.stack[i],dc)   
     def drawInterpoled(self,dc):
         i=self.pointer
         if i>=0 and i<len(self.interpoled):
@@ -1317,8 +2082,8 @@ def C_factory(P, V=None, n=2):
     C.endpoint = True#C.max!=V[-1]
     return C
 def drawAllNormal(canvas,All,dc,num=20):
-        for a in All:
-            drawPoints(canvas,toSpline(a,num),dc)
+    for a in All:
+        drawPoints(canvas,toSpline(a,num),dc)
 def drawPoints(canvas,todraw,dc):
     global primera
     primera=[]
@@ -1475,7 +2240,6 @@ def Centroid(pts):
    x /= len(pts)
    y /= len(pts)
    return [x,y]
-
 class controlPoint(object):
     rad=7
     locations=[]
@@ -1517,8 +2281,6 @@ class controlPoint(object):
         pm=[(p0[0]+pf[0])/2,(p0[1]+pf[1])/2]
         self.draw.strokes[i][j+1][0]=pm[0]
         self.draw.strokes[i][j+1][1]=pm[1]
-        
-
     def moveBackwards(self,i,j):
         if(j-2<0):
             return
