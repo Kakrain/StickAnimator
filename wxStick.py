@@ -7,7 +7,6 @@ from copy import deepcopy
 import wx.lib.scrolledpanel as scrolled
 import scipy.interpolate as si
 import time
-##import sys
 from OpenGL.arrays import vbo
 from wx import glcanvas
 from OpenGL.GL import *
@@ -289,21 +288,40 @@ class AvatarFrame(CustomPanel):
         CustomPanel.__init__(self,mainwindow,sizer,title="área del ávatar",p=(1,2))
         self.avatarcanvas = AvatarCanvas(self)
         self.SetMinSize((0, 0))
-        self.avatarcanvas.SetMinSize((200, 200))
-        self.sizer.Add(self.avatarcanvas, 0, wx.EXPAND|wx.ALIGN_TOP|wx.ALL, 0)
+        self.avatarcanvas.SetMinSize((400, 400))
+        self.render_button=CustomButton(self,wx.Bitmap("renderL.gif"),self.generateAnim,"generar la animación")
+        self.render_button.addHoldingImage(wx.Bitmap("render.gif"))
+##        self.sizer.Add(self.render_button,proportion=1,flag=wx.ALIGN_RIGHT|wx.RIGHT)
+
+
+        self.lateralsizer=wx.BoxSizer(wx.VERTICAL)
+        self.lateralsizer.Add(self.render_button,flag=wx.ALIGN_RIGHT)
+        self.title.Add(self.lateralsizer,proportion=1,flag=wx.ALIGN_RIGHT)
+        
+
+        
+        self.sizer.Add(self.avatarcanvas,proportion=0,flag=wx.ALIGN_CENTER|wx.EXPAND|wx.TOP)
         self.avatarcanvas.Bind(wx.EVT_KEY_DOWN, self.avatarcanvas.onKeyPress)
         self.avatarcanvas.Bind(wx.EVT_LEFT_DOWN, self.avatarcanvas.OnMouseDown)
         self.avatarcanvas.Bind(wx.EVT_LEFT_UP, self.avatarcanvas.OnMouseUp)
         self.avatarcanvas.Bind(wx.EVT_MOTION, self.avatarcanvas.OnMouseMotion)
-        self.Bind(wx.EVT_MOUSEWHEEL,self.avatarcanvas.onMouseWheel)
+        self.Bind(wx.EVT_SIZE,self.OnSize)
         self.avatarcanvas.Bind(wx.EVT_MOUSEWHEEL,self.avatarcanvas.onMouseWheel)
-
-
-                                
         self.SetAutoLayout(True)
-        
-##         self.sizer.Add(self.title,flag=wx.ALIGN_TOP|wx.EXPAND,proportion=1)
-##        self.Bind(wx.EVT_PAINT, self.avatarcanvas.OnPaint)
+        self.title.Layout()
+
+    def generateAnim(self,evt):
+        global main
+        poses=main.customs[0].interpoled
+        self.avatarcanvas.skelman.animation=[]
+        for p in poses:
+            self.avatarcanvas.skelman.animation.append(self.avatarcanvas.skelman.generateSkeleton(p))
+    def OnSize(self, evt):
+        CustomPanel.OnSize(self,evt)
+        size=evt.GetSize()
+        side=min(size[0],size[1])
+        self.avatarcanvas.SetMinSize((side,side))
+        self.avatarcanvas.SetMaxSize((side,side))
 def toOldquad(quad):
     x,y,z,w=quad
     return [w,x,y,z]
@@ -350,11 +368,24 @@ def normalize(v):
     return r
 def getAngles(point):
     x,y,z=point
-    XsqPlusYsq = x**2 + y**2
-    r = math.sqrt(XsqPlusYsq + z**2)               # r
-    elev = math.atan2(z,math.sqrt(XsqPlusYsq))     # theta
-    az = math.atan2(y,x)                           # phi
-    return [elev, az]
+    theta=0
+    if z>0:
+        theta=math.atan(math.sqrt((x*x)+(z*z))/z)
+    elif z==0:
+        theta=math.pi/2
+    else:
+        theta=math.pi+math.atan(math.sqrt(x**2+z**2)/z)
+    phi=0
+    if x>0:
+        if y>0:
+            phi=math.atan(y/x)
+        else:
+            phi=(2*math.pi)+math.atan(y/x)
+    elif x==0:
+        phi=math.pi*(y/max(abs(y),0.01))
+    else:
+        phi=math.pi+math.atan(y/x)
+    return [theta,phi]
 class MyCanvasBase(glcanvas.GLCanvas):
     md5=0
     def __init__(self, parent):
@@ -384,7 +415,7 @@ class MyCanvasBase(glcanvas.GLCanvas):
         self.md5.LoadModel(filename)
         self.md5.setMaxSize(10)#(2.5)
         self.skelman=skeletonManager(self.md5.m_Animation.getBlankSkeleton(),self)
-        self.md5.m_Animation.setSkeleton(self.skelman.skeleton)
+        self.md5.m_Animation.setSkeleton(self.skelman.original)
         self.Refresh(True)
     def OnEraseBackground(self, event):
         pass # Do nothing, to avoid flashing on MSW.
@@ -411,50 +442,156 @@ class skeletonManager():
     skeleton=0
     bag=[]
     animcanvas=0
-    def applyPose(self,pose):
+    animation=[]
+    bagshown=0
+    def generateSkeleton(self,pose):
+        self.reset()
+        pose=deepcopy(pose)
+        pose=self.animcanvas.arreglarPose(pose)
         head=pose[0]
         newpose=[]
         finalpose=[]
+        
         for i in range(1,len(pose)):
-            newpose.append(toSpline(pose[i]))
+            newpose.append(toSpline(pose[i],30))
+##        self.animcanvas.pose=newpose
         for l in range(len(self.bag)):
             limb=self.bag[l]
             tot=self.getTotal(limb)
             part=[]
             part.append(newpose[l][0])
             p=0
-            for i in range(1,len(limb)-1):
+            for i in range(1,len(limb)):
                 jant=self.skeleton.m_Joints[limb[i-1]]
                 joint=self.skeleton.m_Joints[limb[i]]
                 p+=Distance(jant.m_Pos,joint.m_Pos)/tot
-                print int(p*len(newpose[l]))
-                part.append(newpose[l][int(p*len(newpose[l]))])
-            part.append(newpose[l][-1])
+##                part.append(self.getAtPercentage(p,newpose[l]))
+                part.append(newpose[l][int(max(0,p*(len(newpose[l])-1)))])
             finalpose.append(part)
-            self.animcanvas.pose=finalpose
+            
+##        self.animcanvas.pose=finalpose
+        
         for i in range(len(self.bag)):
             limb=self.bag[i]
             part=finalpose[i]
-##            for j in range(1,2):
             for j in range(1,len(limb)):
-                old=restaV(self.skeleton.m_Joints[limb[j]].m_Pos,self.skeleton.m_Joints[limb[j-1]].m_Pos)
-                newv=restaV(part[j],part[j-1])                
-                anglesold=getAngles(old)
-                anglesnew=getAngles(newv)
-##                anglesold=[self.arreglarAngle(anglesold[0]),self.arreglarAngle(anglesold[1])]
-##                anglesnew=[self.arreglarAngle(anglesnew[0]),self.arreglarAngle(anglesnew[1])]
-                anglesdelta=restaV(anglesnew,anglesold)#theta phi
-##                anglesdelta=[self.arreglarAngle(anglesdelta[0]),self.arreglarAngle(anglesdelta[1])]
+                oldbag=restaV(self.bagshown[i][j],self.bagshown[i][j-1])
+##                old=restaV(self.skeleton.m_Joints[limb[j]].m_Pos,self.skeleton.m_Joints[limb[j-1]].m_Pos)
+                newv=restaV(part[j],part[j-1])
+                ad=self.getAnglesXYZ(oldbag,newv)
+                self.movePoint(self.bagshown[i],j,[0,1,0],ad[1])
+                self.animcanvas.rotateYGlobal(limb[j],ad[1],i!=0 and j==(len(self.bag)-1))
+
+        for i in range(len(self.bag)):
+            limb=self.bag[i]
+            part=finalpose[i]
+            for j in range(1,len(limb)):
+                oldbag=restaV(self.bagshown[i][j],self.bagshown[i][j-1])
+##                old=restaV(self.skeleton.m_Joints[limb[j]].m_Pos,self.skeleton.m_Joints[limb[j-1]].m_Pos)
+                newv=restaV(part[j],part[j-1])
+                ad=self.getAnglesXYZ(oldbag,newv)
+                self.movePoint(self.bagshown[i],j,[1,0,0],ad[0])
+                self.animcanvas.rotateXGlobal(limb[j],ad[0],i!=0 and j==(len(self.bag)-1))#j!=1)
                 
-                theta=anglesdelta[0]
-                phi=anglesdelta[1]
-                self.animcanvas.rotateXLocal(limb[j],theta)
-                self.animcanvas.rotateZGlobal(limb[j],phi)
-##                self.animcanvas.rotateXLocal(limb[j],-theta,False)
-##                self.animcanvas.rotateZGlobal(limb[j],phi,False)
+        for i in range(len(self.bag)):
+            limb=self.bag[i]
+            part=finalpose[i]
+            for j in range(1,len(limb)):
+                oldbag=restaV(self.bagshown[i][j],self.bagshown[i][j-1])
+##                old=restaV(self.skeleton.m_Joints[limb[j]].m_Pos,self.skeleton.m_Joints[limb[j-1]].m_Pos)
+                newv=restaV(part[j],part[j-1])
+                ad=self.getAnglesXYZ(oldbag,newv)
+                self.movePoint(self.bagshown[i],j,[0,0,1],ad[2])
+                self.animcanvas.rotateZGlobal(limb[j],ad[2],i!=0 and j==(len(self.bag)-1))#j!=1)
+
+
+        h=self.bag[0][0]
+        hant=self.bag[0][1]
+        delta=restaV(self.original.m_Joints[h].m_Pos,self.original.m_Joints[hant].m_Pos)
+        self.skeleton.m_Joints[h].m_Pos=deepcopy(sumV(self.skeleton.m_Joints[hant].m_Pos,delta))
+        self.skeleton.m_Joints[h].m_Orient=deepcopy(self.original.m_Joints[h].m_Orient)
+        ad=self.getAnglesXYZ(finalpose[0][0],finalpose[0][1])
+        self.animcanvas.rotateYLocal(h,ad[1],False)
+        self.animcanvas.rotateXLocal(h,ad[0],False)
+        
+
+        
+        return self.skeleton
+    def movePoint(self,group,i,axis,angle):
+        parentpoint=group[i-1]
+        finalpoint=group[i]
+        oldpos=group[i][:]
+        deltapoint=restaV(finalpoint,parentpoint)
+        rot = Quaternion.from_v_theta(axis,angle)
+        deltapoint=vectorQ(deltapoint,toNewquad(rot.get()))
+        group[i]=sumV(parentpoint,deltapoint)
+        delta=restaV(group[i],oldpos)
+        for j in range(i+1,len(group)):
+            group[j]=sumV(group[j],delta)
+    def getAnglesXYZ(self,va,vb):
+        az=self.getAngle([va[0],va[1],0],[vb[0],vb[1],0])
+        ay=self.getAngle([va[0],0,va[2]],[vb[0],0,vb[2]])
+        ax=self.getAngle([0,va[1],va[2]],[0,vb[1],vb[2]])
+        return [ax,ay,az]
+    def fillBagShown(self):
+        self.bagshown=[]
+        for i in range(len(self.bag)):
+            ngroup=0
+            if i==1 or i==2:
+                ngroup=self.getAlongX(self.bag[i])
+            else:
+                ngroup=self.getAlongZ(self.bag[i])
+            self.bagshown.append(ngroup)
+    def getAlongX(self,group):
+        meany=0
+        meanz=0
+        for i in range(len(group)):
+            point=self.original.m_Joints[group[i]].m_Pos[:]
+            meany+=point[1]
+            meanz+=point[2]
+        meany/=len(group)
+        meanz/=len(group)
+        points=[]
+        for i in range(len(group)):
+            p=self.original.m_Joints[group[i]].m_Pos[:]
+            p[1]=meany
+            p[2]=meanz
+            points.append(p)
+        return points
+    def getAlongZ(self,group):
+        meanx=0
+        meany=0
+        for i in range(len(group)):
+            point=self.original.m_Joints[group[i]].m_Pos[:]
+            meanx+=point[0]
+            meany+=point[1]
+        meanx/=len(group)
+        meany/=len(group)
+        points=[]
+        for i in range(len(group)):
+            p=self.original.m_Joints[group[i]].m_Pos[:]
+            p[0]=meanx
+            p[1]=meany
+            points.append(p)
+        return points
+    def deleteFeet(self,group):
+        tolerance=0.3
+        newgroup=[]
+        newgroup=group[:3]
+        for i in reversed(range(3,len(group))):
+            pant=self.original.m_Joints[group[i-1]].m_Pos
+            point=self.original.m_Joints[group[i]].m_Pos
+            if Distance([pant[0],pant[1]],[point[0],point[1]])<tolerance:
+                newgroup.append(group[i])
+        return newgroup
+            
     def getAngle(self,a,b):
-        print "vector dimensiones: "+str(a)
-        return math.acos(dot(a,b)/(module(a)*module(b)))
+        angle= math.acos(min(0.9999,dot(a,b)/(module(a)*module(b))))
+        cr= cross(a,b)
+        Vn=[1,1,1]
+        if dot(Vn, cr) < 0:
+            angle = -angle
+        return angle
     def arreglarAngle(self,angle):
         r=abs(angle)
         r=r%(2*math.pi)
@@ -462,6 +599,7 @@ class skeletonManager():
             r=-r
         return r
     def reset(self):
+        self.fillBagShown()
         self.skeleton=deepcopy(self.original)
     def getTotal(self,group):
         tot=0
@@ -474,13 +612,12 @@ class skeletonManager():
         return tot
     def __init__(self,sk,animcanvas): 
         self.original=sk
-        self.skeleton=deepcopy(self.original)
         self.animcanvas=animcanvas
         group=[]
         n=-1
         ##torso,"L.arm","R.arm","L.leg","R.Leg"
-        for i in reversed(range(len(self.skeleton.m_Joints))):
-            joint=self.skeleton.m_Joints[i]
+        for i in reversed(range(len(self.original.m_Joints))):
+            joint=self.original.m_Joints[i]
             if n==-1:
                 n=joint.m_ParentID
             if(joint.m_ParentID==n):
@@ -494,35 +631,38 @@ class skeletonManager():
         self.bag=list(reversed(sorted(self.bag,key=len)))
         self.bag=self.bag[:5]
         self.ordenarBag()
+        self.bag[4]=self.deleteFeet(self.bag[4])
+        self.bag[3]=self.deleteFeet(self.bag[3])
+        self.fillBagShown()
     def getXGroup(self,group):
         X=0
         for i in group:
-            joint=self.skeleton.m_Joints[i]
+            joint=self.original.m_Joints[i]
             X+=joint.m_Pos[0]
         X/=len(group)
         return X
     def getZGroup(self,group):
         Z=0
         for i in group:
-            joint=self.skeleton.m_Joints[i]
+            joint=self.original.m_Joints[i]
             Z+=joint.m_Pos[2]
         Z/=len(group)
         return Z
     def ordenarPierna(self,group):
-        pI=self.skeleton.m_Joints[group[0]].m_Pos
-        pF=self.skeleton.m_Joints[group[-1]].m_Pos
+        pI=self.original.m_Joints[group[0]].m_Pos
+        pF=self.original.m_Joints[group[-1]].m_Pos
         if pF[2]>pI[2]:
             return list(reversed(group))
         return group
     def ordenarBrazoDer(self,group):
-        pI=self.skeleton.m_Joints[group[0]].m_Pos
-        pF=self.skeleton.m_Joints[group[-1]].m_Pos
+        pI=self.original.m_Joints[group[0]].m_Pos
+        pF=self.original.m_Joints[group[-1]].m_Pos
         if pF[0]>pI[0]:
             return list(reversed(group))
         return group
     def ordenarBrazoIzq(self,group):
-        pI=self.skeleton.m_Joints[group[0]].m_Pos
-        pF=self.skeleton.m_Joints[group[-1]].m_Pos
+        pI=self.original.m_Joints[group[0]].m_Pos
+        pF=self.original.m_Joints[group[-1]].m_Pos
         if pF[0]<pI[0]:
             return list(reversed(group))
         return group
@@ -535,7 +675,7 @@ class skeletonManager():
         minlen=min(len(brazos[0]),len(brazos[1]))
         for i in range(len(brazos)):
             if len(brazos[i])>minlen:
-               brazos[i]=brazos[i][:minlen]
+               brazos[i]=brazos[i][:minlen-1]
         piernas=list(reversed(sorted([self.bag.pop(0),self.bag.pop(0)],key=self.getXGroup)))
         piernas=[self.ordenarPierna(piernas[0]),self.ordenarPierna(piernas[1])]
         minlen=min(len(piernas[0]),len(piernas[1]))
@@ -545,9 +685,9 @@ class skeletonManager():
         self.bag=[torso]+brazos+piernas
     def getNJoints(self,i):
         n=0
-        if self.skeleton.m_Joints[i].m_ParentID>=0:
+        if self.original.m_Joints[i].m_ParentID>=0:
             n+=1
-        for joint in self.skeleton.m_Joints:
+        for joint in self.original.m_Joints:
             if joint.m_ParentID==i:
                 n+=1
         return n   
@@ -688,6 +828,28 @@ class AvatarCanvas(MyCanvasBase):
             part=pose[i]
             for p in part:
                 p[1]*=-1
+
+        cTorso=Centroid(pose[1])
+        
+        center=Centroid(pose[2])
+        if center[0]<cTorso[0]:
+            for p in pose[2]:
+                p[1]*=-1
+        center=Centroid(pose[3])
+        if center[0]>cTorso[0]:
+            for p in pose[3]:
+                p[1]*=-1
+        center=Centroid(pose[4])
+        if center[0]<cTorso[0]:
+            for p in pose[4]:
+                p[1]*=-1
+        center=Centroid(pose[5])
+        if center[0]>cTorso[0]:
+            for p in pose[5]:
+                p[1]*=-1
+
+
+                
         for i in range(4,6):
             part=pose[i]
             for p in part:
@@ -894,18 +1056,18 @@ class AvatarCanvas(MyCanvasBase):
                 olddelta=restaV(joint.m_Pos,oldpos)
                 joint.m_Pos=sumV(self.skelman.skeleton.m_Joints[i].m_Pos,olddelta)
                 self.followPosition(j,newold)
-    def setPose(self,pose):
+    def setPose(self,i):
         if self.skelman!=0:
-            self.skelman.reset()
-            self.skelman.applyPose(self.arreglarPose(deepcopy(pose)))
-            self.md5.m_Animation.setSkeleton(self.skelman.skeleton)
+            if i<0 or i>= len(self.skelman.animation):
+                return
+            self.md5.m_Animation.setSkeleton(self.skelman.animation[i])
             self.refreshCam()
     def resetPose(self):
         if self.skelman!=0:
             self.skelman.reset()
 ##            self.displayskel=self.md5.m_Animation.getBlankSkeleton()
 ##            self.skelman.skeleton=self.displayskel
-            self.md5.m_Animation.setSkeleton(self.skelman.skeleton)
+            self.md5.m_Animation.setSkeleton(self.skelman.original)
             self.refreshCam()
     def onKeyPress(self, event):
         keycode = event.GetKeyCode()
@@ -926,31 +1088,6 @@ class AvatarCanvas(MyCanvasBase):
             self.theta-=inc/2#left
         if keycode == 65:
             self.theta+=inc/2#right
-##credit    https://jakevdp.github.io/blog/2012/11/24/simple-3d-visualization-in-matplotlib/
-##        if keycode == 88:
-####            self.rotateXGlobal(9,math.pi/10)#9,7,15,25
-##            self.rotateXLocal(25,math.pi/10,False)#9,7,15
-##            self.md5.m_Animation.setSkeleton(self.displayskel)
-##        if keycode == 89:
-####            self.rotateYGlobal(9,math.pi/10)
-##            self.rotateYLocal(25,math.pi/10,False)
-##            self.md5.m_Animation.setSkeleton(self.displayskel)
-##        if keycode == 90:
-####            self.rotateZGlobal(9,math.pi/10)
-##            self.rotateZLocal(25,math.pi/10,False)
-##            self.md5.m_Animation.setSkeleton(self.displayskel)
-##        if keycode == wx.WXK_SPACE:
-##            print "blank skeleton"
-##            self.displayskel=self.md5.m_Animation.getBlankSkeleton()
-##            self.skelman=skeletonManager(self.displayskel,self)
-##            print self.displayskel
-##            self.md5.m_Animation.setSkeleton(self.displayskel)     
-##        self.md5.setQuatVisible(self.getQuaternions())
-        
-##            self.index+=1
-##            self.index=self.index%len(self.md5.m_Animation.m_Skeletons)
-##            print self.index
-##            self.md5.m_Animation.setSkeleton(self.md5.m_Animation.m_Skeletons[self.index])
         self.refreshCam()
     def refreshCam(self):
         self.Z=max(self.Z,0)
@@ -966,7 +1103,6 @@ class AvatarCanvas(MyCanvasBase):
     def OnMouseUp(self, evt):
         pass
     def onMouseWheel(self,evt):
-        print "wheel"
         inc=1.0
         if evt.GetWheelRotation()>0:
             self.Z-=inc
@@ -974,6 +1110,7 @@ class AvatarCanvas(MyCanvasBase):
             self.Z+=inc
         self.refreshCam()
     def OnMouseMotion(self, evt):
+        self.SetFocus()
         if evt.Dragging() and evt.LeftIsDown():
             self.lastx, self.lasty = self.x, self.y
             self.x, self.y = evt.GetPosition()
@@ -1064,9 +1201,9 @@ class ReproductorFrame(CustomPanel):
         if self.playing:
             if self.animframe.timepos<len(self.animframe.interpoled):
                 self.dibujarPose(self.animframe.interpoled[self.animframe.timepos],dc)
-                self.avatarcanvas.setPose(self.animframe.interpoled[self.animframe.timepos])
+                self.avatarcanvas.setPose(self.animframe.timepos)
             else:
-                self.avatarcanvas.resetPose()
+##                self.avatarcanvas.resetPose()
                 self.animframe.timepos=0
                 self.pause(0)
     def startTimer(self):
@@ -1421,6 +1558,7 @@ class AnimationFrame(CustomPanel):
         i=self.getStackPos(self.recalculateCanvas(evt.x))
         self.timepos=i
         if(i<len(self.stack) and i!=0):
+            print self.interpoled[i]
             self.poseS=i
         self.Refresh()
         
@@ -1613,6 +1751,7 @@ class DrawFrame(CustomPanel):
     clicked=False
     finishedsizer=0
     ant=[]
+    start=-1
     def __init__(self,mainwindow,sizer):
         CustomPanel.__init__(self,mainwindow,sizer,title="área de dibujo",p=(1,0))
         self.currentpoints=[]
@@ -1758,7 +1897,7 @@ class DrawFrame(CustomPanel):
         animator=main.customs[0]
         p=self.standarPose()
         animator.agregarPose(p)
-    def newPose(self):
+    def newPose(self,evt=0):
         s=self.GetClientSize()
         self.lastsize=[s[0],s[1]]
         self.head=TranslateTo(self.head,[s[0]*0.5,s[1]*0.25])
@@ -1849,6 +1988,8 @@ class DrawFrame(CustomPanel):
         self.currentpoints.append([event.x,event.y])
         self.Refresh()
     def clickedDraw(self,event):
+        if self.start<0:
+            self.start=time.time()
         global primera
         primera=[]
         self.currentpoints=[]
@@ -1895,6 +2036,8 @@ class DrawFrame(CustomPanel):
     def selectRelease(self,evt):
         self.selectedCP=0  
     def hechoAction(self):
+        print time.time()-self.start
+        self.start=-1
         self.Bind(wx.EVT_LEFT_DOWN, self.selectClick)
         self.Bind(wx.EVT_MOTION, self.selectMove)
         self.Bind(wx.EVT_LEFT_UP, self.selectRelease)
@@ -2231,15 +2374,24 @@ def BoundingBox(pts):
 def TranslateTo(pts,p):
    c=Centroid(pts)
    return np.subtract(np.add(pts,[p]*len(pts)),[c]*len(pts))
+##def Centroid(pts):
+##   x = 0
+##   y = 0
+##   for a in pts:
+##      x += a[0]
+##      y += a[1]
+##   x /= len(pts)
+##   y /= len(pts)
+##   return [x,y]
 def Centroid(pts):
-   x = 0
-   y = 0
-   for a in pts:
-      x += a[0]
-      y += a[1]
-   x /= len(pts)
-   y /= len(pts)
-   return [x,y]
+    n=len(pts[0])
+    center=[0.0]*n
+    for a in pts:
+        for i in range(n):
+            center[i]+=a[i]
+    for i in range(n):
+        center[i]/=len(pts)
+    return center
 class controlPoint(object):
     rad=7
     locations=[]
